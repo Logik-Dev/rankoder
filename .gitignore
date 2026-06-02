@@ -1,0 +1,50 @@
+# Rust
+/target/
+/debug/
+/release/
+/*.pot
+
+# Cargo
+/.cargo/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Database (local dev)
+/pgdata/
+*.pgdata/
+
+# Nix
+.direnv/
+.envrc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+/logs/
+
+# AI
+.claude/
+CLAUDE.md
+
+# Syncthing
+.stfolder/
+.stignore
+
+# MCP local config
+.mcp.json
+
+
+# Added by cargo
+
+/target
