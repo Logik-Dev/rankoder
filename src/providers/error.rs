@@ -10,4 +10,6 @@ pub enum ProviderError {
     InvalidUrl,
     #[error("invalid api key")]
     InvalidApiKey(#[from] InvalidHeaderValue),
+    #[error("missing provider id: {0}")]
+    MissingProviderId(&'static str),
 }

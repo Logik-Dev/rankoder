@@ -1,8 +1,11 @@
 use uuid::Uuid;
 
-use crate::models::common::{AbsoluteFilePath, Rating, TmdbId};
+use crate::models::{
+    common::{AbsoluteFilePath, Rating, TmdbId},
+    provider_ids::ProviderIds,
+};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SeriesId(Uuid);
 
 impl SeriesId {
@@ -14,9 +17,9 @@ impl SeriesId {
 #[derive(Debug)]
 pub struct Series {
     pub id: SeriesId,
-    pub jellyfin_id: String,
     pub title: String,
     pub tmdb_id: Option<TmdbId>,
     pub rating: Option<Rating>,
     pub path: Option<AbsoluteFilePath>,
+    pub provider_ids: ProviderIds,
 }

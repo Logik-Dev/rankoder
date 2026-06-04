@@ -6,4 +6,8 @@ pub enum DomainError {
     InvalidRating(f32),
     #[error("path must be absolute: {0}")]
     InvalidPath(String),
+    #[error("invalid season number: {0}")]
+    InvalidSeasonNumber(i32),
+    #[error("invalid episode number: {0}")]
+    InvalidEpisodeNumber(i32),
 }

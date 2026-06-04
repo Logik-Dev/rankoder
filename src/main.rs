@@ -25,8 +25,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?);
 
     let series = jellyfin.list_series().await?;
-    for serie in series {
+    for serie in &series {
         println!("{:?}", serie);
+        let episodes = jellyfin.list_episodes(serie).await?;
+        for ep in &episodes {
+            println!("  {:?}", ep);
+        }
     }
 
     Ok(())
