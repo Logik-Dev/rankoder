@@ -2,6 +2,7 @@ use super::dto::JellyfinItem;
 use crate::models::{
     common::{AbsoluteFilePath, EpisodeNumber, Rating, SeasonNumber, TmdbId},
     episode::{Episode, EpisodeId},
+    movie::{Movie, MovieId},
     provider_ids::ProviderIds,
     series::{Series, SeriesId},
 };
@@ -27,6 +28,37 @@ impl From<JellyfinItem> for Series {
 
         Self {
             id: SeriesId::new(),
+            title: item.name,
+            rating,
+            tmdb_id,
+            path,
+            provider_ids: ProviderIds {
+                jellyfin: Some(item.id),
+            },
+        }
+    }
+}
+
+impl From<JellyfinItem> for Movie {
+    fn from(item: JellyfinItem) -> Self {
+        let rating = item.community_rating.and_then(|r| {
+            Rating::new(r)
+                .inspect_err(|error| warn!(%error, "invalid rating value"))
+                .ok()
+        });
+        let tmdb_id = item.provider_ids.get("Tmdb").and_then(|s| {
+            s.parse::<TmdbId>()
+                .inspect_err(|error| warn!(%error, "failed to parse tmdb_id"))
+                .ok()
+        });
+        let path = item.path.and_then(|p| {
+            AbsoluteFilePath::new(&p)
+                .inspect_err(|error| warn!(%error, "invalid path"))
+                .ok()
+        });
+
+        Self {
+            id: MovieId::new(),
             title: item.name,
             rating,
             tmdb_id,

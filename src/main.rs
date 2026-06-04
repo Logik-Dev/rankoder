@@ -5,7 +5,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 
 use crate::{
     config::Config,
-    providers::{JellyfinProvider, SeriesProvider},
+    providers::{JellyfinProvider, MovieProvider, SeriesProvider},
 };
 
 mod config;
@@ -19,18 +19,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cfg = Config::from_env()?;
 
-    let jellyfin: Arc<dyn SeriesProvider> = Arc::new(JellyfinProvider::new(
+    let provider = Arc::new(JellyfinProvider::new(
         &cfg.jellyfin_url,
         &cfg.jellyfin_api_key,
     )?);
 
-    let series = jellyfin.list_series().await?;
+    let series_provider: Arc<dyn SeriesProvider> = provider.clone();
+    let series = series_provider.list_series().await?;
     for serie in &series {
         println!("{:?}", serie);
-        let episodes = jellyfin.list_episodes(serie).await?;
+        let episodes = series_provider.list_episodes(serie).await?;
         for ep in &episodes {
             println!("  {:?}", ep);
         }
+    }
+
+    let movie_provider: Arc<dyn MovieProvider> = provider;
+    let movies = movie_provider.list_movies().await?;
+    for movie in &movies {
+        println!("{:?}", movie);
     }
 
     Ok(())

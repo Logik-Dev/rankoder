@@ -1,5 +1,6 @@
 mod dto;
 mod mapping;
+mod movie;
 mod series;
 
 use std::fmt::Debug;
