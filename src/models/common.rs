@@ -59,7 +59,7 @@ impl AbsoluteFilePath {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct SeasonNumber(u32);
 
 impl SeasonNumber {
@@ -68,6 +68,10 @@ impl SeasonNumber {
             return Err(DomainError::InvalidSeasonNumber(value));
         }
         Ok(Self(value as u32))
+    }
+
+    pub fn as_i16(&self) -> i16 {
+        self.0 as i16
     }
 }
 
@@ -80,5 +84,9 @@ impl EpisodeNumber {
             return Err(DomainError::InvalidEpisodeNumber(value));
         }
         Ok(Self(value as u32))
+    }
+
+    pub fn as_i16(&self) -> i16 {
+        self.0 as i16
     }
 }

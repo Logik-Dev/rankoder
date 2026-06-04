@@ -5,14 +5,14 @@ mod series;
 
 use std::fmt::Debug;
 
+use crate::providers::error::ProviderError;
 use axum::http::{HeaderMap, HeaderValue};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use reqwest::{Client, Url};
 
-use crate::providers::error::ProviderError;
+pub use dto::{JellyfinItem, JellyfinResponse};
 
-pub(crate) use dto::{JellyfinItem, JellyfinResponse};
-
+#[derive(Clone)]
 pub struct JellyfinProvider {
     http: Client,
     base_url: Url,

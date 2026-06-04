@@ -43,7 +43,7 @@
             export PGDATA="${pgData}"
             export PGPORT="${pgPort}"
             export PGHOST="/tmp"
-            export DATABASE_URL="postgresql://localhost:${pgPort}/${dbName}"
+            export AUTO_MIGRATE=1
             export DB_SOCKET_DIR="/tmp"
             export DB_PORT="${pgPort}"
             export DB_NAME="${dbName}"

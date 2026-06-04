@@ -1,6 +1,31 @@
 pub mod common;
+pub mod drafts;
 pub mod episode;
 pub mod error;
+pub mod event;
+pub mod media_file;
 pub mod movie;
-pub mod provider_ids;
 pub mod series;
+
+#[macro_export]
+macro_rules! impl_entity_id {
+    ($name:ident) => {
+        impl $name {
+            pub fn new() -> Self {
+                Self(uuid::Uuid::now_v7())
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl From<uuid::Uuid> for $name {
+            fn from(uuid: uuid::Uuid) -> Self {
+                Self(uuid)
+            }
+        }
+    };
+}

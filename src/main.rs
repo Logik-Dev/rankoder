@@ -1,16 +1,16 @@
-use std::sync::Arc;
-
-use tracing::instrument;
+use sqlx::postgres::PgPoolOptions;
+use tracing::{info, instrument};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
-    config::Config,
-    providers::{JellyfinProvider, MovieProvider, SeriesProvider},
+    config::Config, orchestrator::SyncOrchestrator, providers::JellyfinProvider, store::MediaStore,
 };
 
 mod config;
 pub mod models;
+mod orchestrator;
 pub mod providers;
+pub mod store;
 
 #[tokio::main]
 #[instrument(err)]
@@ -19,37 +19,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cfg = Config::from_env()?;
 
-    let provider = Arc::new(JellyfinProvider::new(
-        &cfg.jellyfin_url,
-        &cfg.jellyfin_api_key,
-    )?);
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&std::env::var("DATABASE_URL")?)
+        .await?;
 
-    let series_provider: Arc<dyn SeriesProvider> = provider.clone();
-    let series = series_provider.list_series().await?;
-    for serie in &series {
-        println!("{:?}", serie);
-        let episodes = series_provider.list_episodes(serie).await?;
-        for ep in &episodes {
-            println!("  {:?}", ep);
-        }
+    if std::env::var("AUTO_MIGRATE").is_ok_and(|v| v == "1") {
+        sqlx::migrate!("./migrations").run(&pool).await?;
+        info!("migrations applied");
     }
 
-    let movie_provider: Arc<dyn MovieProvider> = provider;
-    let movies = movie_provider.list_movies().await?;
-    for movie in &movies {
-        println!("{:?}", movie);
-    }
+    let provider = JellyfinProvider::new(&cfg.jellyfin_url, &cfg.jellyfin_api_key)?;
+
+    let store = MediaStore::new(pool);
+    let orchestrator = SyncOrchestrator::new(provider.clone(), provider, store);
+    orchestrator.sync().await?;
 
     Ok(())
 }
 
-// Logging file + stdout
 fn init_tracing() {
     let stdout_layer = fmt::layer().compact().with_target(false);
 
     let file_appender = tracing_appender::rolling::daily("logs", "rankoder.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-    // Leak the guard so the background writer thread lives for the entire process.
     std::mem::forget(guard);
     let json_layer = fmt::layer().json().with_writer(non_blocking);
 

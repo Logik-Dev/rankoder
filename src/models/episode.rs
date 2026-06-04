@@ -1,19 +1,18 @@
 use uuid::Uuid;
 
-use crate::models::{
-    common::{AbsoluteFilePath, EpisodeNumber, Rating, SeasonNumber, TmdbId},
-    provider_ids::ProviderIds,
-    series::SeriesId,
+use crate::{
+    impl_entity_id,
+    models::{
+        common::{EpisodeNumber, Rating, SeasonNumber, TmdbId},
+        series::SeriesId,
+    },
 };
 
-#[derive(Debug, Clone)]
-pub struct EpisodeId(Uuid);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, sqlx::Type)]
+#[sqlx(transparent)]
+pub struct EpisodeId(pub Uuid);
 
-impl EpisodeId {
-    pub fn new() -> Self {
-        Self(Uuid::now_v7())
-    }
-}
+impl_entity_id!(EpisodeId);
 
 #[derive(Debug)]
 pub struct Episode {
@@ -22,8 +21,6 @@ pub struct Episode {
     pub season_number: Option<SeasonNumber>,
     pub episode_number: Option<EpisodeNumber>,
     pub title: String,
-    pub path: Option<AbsoluteFilePath>,
     pub tmdb_id: Option<TmdbId>,
     pub rating: Option<Rating>,
-    pub provider_ids: ProviderIds,
 }

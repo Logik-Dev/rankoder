@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use crate::providers::ParentId;
+
 #[derive(Deserialize)]
-pub(crate) struct JellyfinResponse {
+pub struct JellyfinResponse {
     #[serde(rename = "Items")]
     pub items: Vec<JellyfinItem>,
     #[serde(rename = "TotalRecordCount")]
@@ -11,7 +13,7 @@ pub(crate) struct JellyfinResponse {
 }
 
 #[derive(Deserialize, Debug)]
-pub(crate) struct JellyfinItem {
+pub struct JellyfinItem {
     #[serde(rename = "Id")]
     pub id: String,
     #[serde(rename = "Name")]
@@ -28,4 +30,10 @@ pub(crate) struct JellyfinItem {
     pub parent_index_number: Option<i32>,
     #[serde(rename = "SeriesId")]
     pub series_id: Option<String>,
+}
+
+impl ParentId for JellyfinItem {
+    fn parent_id(&self) -> Option<&str> {
+        self.series_id.as_deref()
+    }
 }
