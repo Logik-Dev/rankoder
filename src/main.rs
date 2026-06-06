@@ -1,16 +1,20 @@
 use sqlx::postgres::PgPoolOptions;
+use tokio::sync::mpsc;
 use tracing::{info, instrument};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
-    config::Config, orchestrator::SyncOrchestrator, providers::JellyfinProvider, store::MediaStore,
+    config::Config, listener::PostgresListener, orchestrator::SyncOrchestrator,
+    providers::JellyfinProvider, store::MediaStore, workflow::WorkflowOrchestrator,
 };
 
 mod config;
+mod listener;
 pub mod models;
 mod orchestrator;
 pub mod providers;
 pub mod store;
+mod workflow;
 
 #[tokio::main]
 #[instrument(err)]
@@ -29,11 +33,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("migrations applied");
     }
 
+    let (tx, rx) = mpsc::channel(100);
+
+    let listener = PostgresListener::new(pool.clone(), tx);
+    let listener_handle = tokio::spawn(listener.listen());
+
+    let workflow = WorkflowOrchestrator::new(rx);
+    let workflow_handle = tokio::spawn(workflow.run());
+
     let provider = JellyfinProvider::new(&cfg.jellyfin_url, &cfg.jellyfin_api_key)?;
 
     let store = MediaStore::new(pool);
     let orchestrator = SyncOrchestrator::new(provider.clone(), provider, store);
     orchestrator.sync().await?;
+
+    info!("sync complete, waiting for Ctrl+C to stop");
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("shutting down");
+        }
+        res = listener_handle => {
+            info!("listener stopped: {:?}", res);
+        }
+        res = workflow_handle => {
+            info!("workflow stopped: {:?}", res);
+        }
+    }
 
     Ok(())
 }
