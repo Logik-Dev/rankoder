@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MediaEvent {
     Discovered { source: String },
+    Probed,
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::models::error::DomainError;
@@ -53,9 +53,11 @@ impl AbsoluteFilePath {
         }
         Ok(Self(path.to_path_buf()))
     }
+}
 
-    pub fn as_path(&self) -> &std::path::Path {
-        &self.0
+impl AsRef<Path> for AbsoluteFilePath {
+    fn as_ref(&self) -> &Path {
+        self.0.as_path()
     }
 }
 

@@ -1,20 +1,65 @@
-use tokio::sync::mpsc;
-use tracing::info;
+use std::sync::Arc;
 
-use crate::listener::EventNotification;
+use tokio::sync::mpsc;
+use tracing::{error, info, instrument, warn};
+
+use crate::{
+    models::{media_file::MediaFileId, workflow::WorkflowStateTag},
+    probe::FFmpeg,
+    store::MediaStore,
+};
 
 pub struct WorkflowOrchestrator {
-    rx: mpsc::Receiver<EventNotification>,
+    rx: mpsc::Receiver<MediaFileId>,
+    media_store: Arc<MediaStore>,
+    ffmpeg: FFmpeg,
 }
 
 impl WorkflowOrchestrator {
-    pub fn new(rx: mpsc::Receiver<EventNotification>) -> Self {
-        Self { rx }
+    pub fn new(
+        rx: mpsc::Receiver<MediaFileId>,
+        media_store: Arc<MediaStore>,
+        ffmpeg: FFmpeg,
+    ) -> Self {
+        Self {
+            rx,
+            media_store,
+            ffmpeg,
+        }
     }
 
+    #[instrument(skip(self), err)]
     pub async fn run(mut self) -> anyhow::Result<()> {
-        while let Some(event) = self.rx.recv().await {
-            info!(?event, "workflow event received");
+        info!("starting workflow orchestrator");
+
+        while let Some(media_file_id) = self.rx.recv().await {
+            let Ok(media_file) = self.media_store.find_media_file_by_id(&media_file_id).await
+            else {
+                error!(?media_file_id, "failed to find media file on database");
+                continue;
+            };
+
+            match media_file.workflow_state {
+                WorkflowStateTag::Discovered => {
+                    let video_properties = match FFmpeg::probe(&media_file.path).await {
+                        Ok(v) => v,
+                        Err(error) => {
+                            warn!(?media_file_id, %error, "failed to probe media file");
+                            continue;
+                        }
+                    };
+
+                    if let Err(error) = self
+                        .media_store
+                        .insert_probe_data(&media_file_id, &video_properties)
+                        .await
+                    {
+                        error!(%error, ?media_file_id, "failed to save probe data");
+                        continue;
+                    };
+                }
+                WorkflowStateTag::Probed => {}
+            }
         }
         info!("event channel closed, shutting down workflow orchestrator");
         Ok(())

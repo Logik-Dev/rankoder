@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
 use tracing::{info, instrument, warn};
 
 use crate::{
     models::{
-        drafts::{self, MovieDraft, SeriesDraft},
+        drafts::{MovieDraft, SeriesDraft},
         series::SeriesId,
     },
     providers::{MovieProvider, ParentId, SeriesProvider},
@@ -15,7 +15,7 @@ use crate::{
 pub struct SyncOrchestrator<S, M> {
     series_provider: S,
     movie_provider: M,
-    store: MediaStore,
+    store: Arc<MediaStore>,
 }
 
 impl<S, M> SyncOrchestrator<S, M>
@@ -23,7 +23,7 @@ where
     S: SeriesProvider,
     M: MovieProvider,
 {
-    pub fn new(series_provider: S, movie_provider: M, store: MediaStore) -> Self {
+    pub fn new(series_provider: S, movie_provider: M, store: Arc<MediaStore>) -> Self {
         Self {
             series_provider,
             movie_provider,

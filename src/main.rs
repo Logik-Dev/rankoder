@@ -1,19 +1,22 @@
+use std::sync::Arc;
+
 use sqlx::postgres::PgPoolOptions;
 use tokio::sync::mpsc;
 use tracing::{info, instrument};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
-    config::Config, listener::PostgresListener, orchestrator::SyncOrchestrator,
-    providers::JellyfinProvider, store::MediaStore, workflow::WorkflowOrchestrator,
+    config::Config, listener::PostgresListener, probe::FFmpeg, providers::JellyfinProvider,
+    store::MediaStore, sync::SyncOrchestrator, workflow::WorkflowOrchestrator,
 };
 
 mod config;
 mod listener;
 pub mod models;
-mod orchestrator;
+mod probe;
 pub mod providers;
 pub mod store;
+mod sync;
 mod workflow;
 
 #[tokio::main]
@@ -34,18 +37,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (tx, rx) = mpsc::channel(100);
+    let store = Arc::new(MediaStore::new(pool.clone()));
 
-    let listener = PostgresListener::new(pool.clone(), tx);
-    let listener_handle = tokio::spawn(listener.listen());
+    let postgres_listener = PostgresListener::new(pool.clone(), tx);
+    let listener_handle = tokio::spawn(postgres_listener.listen());
 
-    let workflow = WorkflowOrchestrator::new(rx);
-    let workflow_handle = tokio::spawn(workflow.run());
+    let workflow_orchestrator = WorkflowOrchestrator::new(rx, store.clone(), FFmpeg);
+    let workflow_handle = tokio::spawn(workflow_orchestrator.run());
 
     let provider = JellyfinProvider::new(&cfg.jellyfin_url, &cfg.jellyfin_api_key)?;
 
-    let store = MediaStore::new(pool);
-    let orchestrator = SyncOrchestrator::new(provider.clone(), provider, store);
-    orchestrator.sync().await?;
+    let sync_orchestrator = SyncOrchestrator::new(provider.clone(), provider, store.clone());
+    sync_orchestrator.sync().await?;
 
     info!("sync complete, waiting for Ctrl+C to stop");
 

@@ -17,7 +17,7 @@ pub(crate) async fn upsert_movie_file(
     draft: &MovieDraft,
 ) -> Result<MediaFileId, StoreError> {
     let new_id = MediaFileId::new();
-    let file_path = draft.media_file.path.as_path().to_string_lossy();
+    let file_path = draft.media_file.path.as_ref().to_string_lossy();
 
     let row = sqlx::query!(
         r#"INSERT INTO media_files (id, movie_id, file_path, size_bytes, jellyfin_id)
@@ -60,7 +60,7 @@ pub(crate) async fn upsert_episode_file(
     draft: &EpisodeDraft,
 ) -> Result<MediaFileId, StoreError> {
     let new_id = MediaFileId::new();
-    let file_path = draft.media_file.path.as_path().to_string_lossy();
+    let file_path = draft.media_file.path.as_ref().to_string_lossy();
 
     let row = sqlx::query!(
         r#"INSERT INTO media_files (id, episode_id, file_path, size_bytes, jellyfin_id)

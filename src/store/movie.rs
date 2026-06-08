@@ -1,5 +1,5 @@
 use sqlx::{Postgres, Transaction};
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use crate::{
     models::{
@@ -24,6 +24,13 @@ pub(crate) async fn find_or_create_movie(
         .fetch_optional(&mut **tx)
         .await?;
         if let Some(r) = row {
+            info!(
+                movie_id = %r.id.as_uuid(),
+                ?tmdb_id,
+                jellyfin_id = %draft.jellyfin_id,
+                title = %draft.title,
+                "Movie already exists by tmdb_id, inserting new provider reference"
+            );
             sqlx::query!(
                 r#"INSERT INTO movie_provider_refs (movie_id, provider, external_id)
                    VALUES ($1, $2, $3)

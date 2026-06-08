@@ -4,7 +4,7 @@
 
 CREATE TYPE workflow_state AS ENUM (
     'discovered',
-    'scanning',
+    'probed',
     'analyzed',
     'pending_approval',
     'transcoding',
@@ -140,7 +140,7 @@ CREATE TABLE media_files (
     height          INTEGER,
     width           INTEGER,
     bitrate_kbps    INTEGER,
-    framerate       REAL,
+    framerate       TEXT,
 
     -- État du workflow + décision figée
     workflow_state  workflow_state  NOT NULL DEFAULT 'discovered',

@@ -4,6 +4,9 @@ use serde::Deserialize;
 use sqlx::postgres::{PgListener, PgPool};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+use uuid::Uuid;
+
+use crate::models::{error::DomainError, media_file::MediaFileId};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EventNotification {
@@ -14,11 +17,11 @@ pub struct EventNotification {
 
 pub struct PostgresListener {
     pool: PgPool,
-    tx: mpsc::Sender<EventNotification>,
+    tx: mpsc::Sender<MediaFileId>,
 }
 
 impl PostgresListener {
-    pub fn new(pool: PgPool, tx: mpsc::Sender<EventNotification>) -> Self {
+    pub fn new(pool: PgPool, tx: mpsc::Sender<MediaFileId>) -> Self {
         Self { pool, tx }
     }
 
@@ -38,10 +41,15 @@ impl PostgresListener {
 
         loop {
             let notif = listener.recv().await?;
-            let payload = notif.payload();
+            let payload: serde_json::Value = serde_json::from_str(notif.payload())?;
 
-            let event: EventNotification = match serde_json::from_str(payload) {
-                Ok(e) => e,
+            let media_file_id = match payload["media_file_id"]
+                .as_str()
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .ok_or(DomainError::MissingUuid)
+                .map(MediaFileId::from)
+            {
+                Ok(id) => id,
                 Err(e) => {
                     warn!(
                         payload = %payload,
@@ -52,7 +60,7 @@ impl PostgresListener {
                 }
             };
 
-            if self.tx.send(event).await.is_err() {
+            if self.tx.send(media_file_id).await.is_err() {
                 info!("notification channel closed, shutting down listener");
                 return Ok(());
             }

@@ -6,6 +6,8 @@ pub mod event;
 pub mod media_file;
 pub mod movie;
 pub mod series;
+pub mod video;
+pub mod workflow;
 
 #[macro_export]
 macro_rules! impl_entity_id {
@@ -13,6 +15,10 @@ macro_rules! impl_entity_id {
         impl $name {
             pub fn new() -> Self {
                 Self(uuid::Uuid::now_v7())
+            }
+
+            pub fn as_uuid(&self) -> uuid::Uuid {
+                self.0
             }
         }
 
