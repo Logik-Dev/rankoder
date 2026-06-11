@@ -9,6 +9,7 @@ use crate::{
         event::MediaEvent,
         media_file::{MediaFile, MediaFileId},
         series::SeriesId,
+        transcode::TranscodeDecision,
         video::VideoProperties,
         workflow::WorkflowStateTag,
     },
@@ -92,8 +93,8 @@ impl MediaStore {
         let row = sqlx::query_as!(
             MediaFileRow,
             r#"
-                SELECT id, episode_id, movie_id, file_path, size_bytes, video_codec, height, 
-                width, bitrate_kbps, framerate, workflow_state as "workflow_state: WorkflowStateTag" 
+                SELECT id, episode_id, movie_id, file_path, size_bytes, video_codec, height,
+                width, bitrate_kbps, framerate, duration_seconds, workflow_state as "workflow_state: WorkflowStateTag"
                 FROM media_files
                 WHERE id = $1
             "#,
@@ -113,8 +114,10 @@ impl MediaStore {
         let mut tx = self.pool.begin().await?;
         let _ = sqlx::query!(
             r#"
-                UPDATE media_files SET size_bytes = $1, video_codec = $2, height = $3, width = $4, bitrate_kbps = $5, framerate = $6, workflow_state = $7
-                WHERE id = $8
+                UPDATE media_files
+                SET size_bytes = $1, video_codec = $2, height = $3, width = $4,
+                    bitrate_kbps = $5, framerate = $6, duration_seconds = $7, workflow_state = $8
+                WHERE id = $9
             "#,
             video_properties.size_bytes.as_u64() as i64,
             video_properties.video_codec.as_ref(),
@@ -122,6 +125,7 @@ impl MediaStore {
             video_properties.resolution.width() as i32,
             video_properties.bitrate.as_ref().map(|b| b.as_bps() as i32),
             video_properties.framerate.as_ref().map(|f| f.to_string()),
+            video_properties.duration.as_ref().map(|d| d.as_secs_f64()),
             WorkflowStateTag::Probed as WorkflowStateTag,
             media_file_id.as_uuid()
         )
@@ -141,6 +145,109 @@ impl MediaStore {
 
         tx.commit().await?;
 
+        Ok(())
+    }
+
+    pub async fn fetch_tmdb_rating_for_file(
+        &self,
+        media_file_id: &MediaFileId,
+    ) -> Result<Option<f32>, StoreError> {
+        let row = sqlx::query!(
+            r#"
+                SELECT COALESCE(e.rating, m.rating) AS rating
+                FROM media_files mf
+                LEFT JOIN episodes e ON mf.episode_id = e.id
+                LEFT JOIN movies   m ON mf.movie_id   = m.id
+                WHERE mf.id = $1
+            "#,
+            media_file_id.as_uuid(),
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.rating)
+    }
+
+    pub async fn save_analysis_result(
+        &self,
+        media_file_id: &MediaFileId,
+        decision: &TranscodeDecision,
+    ) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+
+        match decision {
+            TranscodeDecision::Encode { bpp, compression_potential, crf } => {
+                let spec = serde_json::json!({ "crf": crf });
+                sqlx::query!(
+                    r#"
+                        UPDATE media_files
+                        SET workflow_state = $1, transcode_spec = $2
+                        WHERE id = $3
+                    "#,
+                    WorkflowStateTag::Analyzed as WorkflowStateTag,
+                    spec,
+                    media_file_id.as_uuid(),
+                )
+                .execute(&mut *tx)
+                .await?;
+
+                sqlx::query!(
+                    r#"INSERT INTO events(media_file_id, event) VALUES($1, $2)"#,
+                    media_file_id.as_uuid(),
+                    serde_json::to_value(MediaEvent::Analyzed {
+                        bpp: *bpp,
+                        compression_potential: *compression_potential,
+                        crf: *crf,
+                    })?
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+            TranscodeDecision::Skip(reason) => {
+                sqlx::query!(
+                    r#"UPDATE media_files SET workflow_state = $1 WHERE id = $2"#,
+                    WorkflowStateTag::Skipped as WorkflowStateTag,
+                    media_file_id.as_uuid(),
+                )
+                .execute(&mut *tx)
+                .await?;
+
+                sqlx::query!(
+                    r#"INSERT INTO events(media_file_id, event) VALUES($1, $2)"#,
+                    media_file_id.as_uuid(),
+                    serde_json::to_value(MediaEvent::Skipped {
+                        reason: reason.clone(),
+                        bpp: None,
+                        compression_potential: None,
+                    })?
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+            TranscodeDecision::SkipWithAnalysis { reason, bpp, compression_potential } => {
+                sqlx::query!(
+                    r#"UPDATE media_files SET workflow_state = $1 WHERE id = $2"#,
+                    WorkflowStateTag::Skipped as WorkflowStateTag,
+                    media_file_id.as_uuid(),
+                )
+                .execute(&mut *tx)
+                .await?;
+
+                sqlx::query!(
+                    r#"INSERT INTO events(media_file_id, event) VALUES($1, $2)"#,
+                    media_file_id.as_uuid(),
+                    serde_json::to_value(MediaEvent::Skipped {
+                        reason: reason.clone(),
+                        bpp: Some(*bpp),
+                        compression_potential: Some(*compression_potential),
+                    })?
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 }

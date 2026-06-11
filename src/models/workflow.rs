@@ -3,4 +3,10 @@
 pub enum WorkflowStateTag {
     Discovered,
     Probed,
+    Analyzed,
+    PendingApproval,
+    Transcoding,
+    Done,
+    Skipped,
+    Failed,
 }

@@ -31,4 +31,5 @@ pub(super) enum StreamType {
 pub(super) struct FfprobeFormat {
     pub bit_rate: Option<String>,
     pub size: Option<String>,
+    pub duration: Option<String>,
 }

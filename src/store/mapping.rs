@@ -4,7 +4,7 @@ use crate::{
     models::{
         common::AbsoluteFilePath,
         media_file::{MediaFile, SizeBytes},
-        video::{Bitrate, Framerate, Resolution, VideoCodec, VideoProperties},
+        video::{Bitrate, DurationSecs, Framerate, Resolution, VideoCodec, VideoProperties},
     },
     store::{dto::MediaFileRow, error::StoreError},
 };
@@ -45,6 +45,10 @@ impl TryFrom<MediaFileRow> for MediaFile {
             .map(Framerate::from_str)
             .transpose()?;
 
+        let duration = value
+            .duration_seconds
+            .and_then(|s| DurationSecs::new(s).ok());
+
         let video_properties = match (video_codec, resolution, size_bytes) {
             (Some(video_codec), Some(resolution), Some(size_bytes)) => Some(VideoProperties {
                 video_codec,
@@ -52,6 +56,7 @@ impl TryFrom<MediaFileRow> for MediaFile {
                 size_bytes,
                 bitrate,
                 framerate,
+                duration,
             }),
             _ => None,
         };

@@ -22,4 +22,6 @@ pub enum DomainError {
     UnknownStatus(String),
     #[error("invalid size")]
     InvalidSizeBytes,
+    #[error("invalid duration")]
+    InvalidDuration,
 }

@@ -3,7 +3,7 @@ use std::str::FromStr;
 use crate::{
     models::{
         media_file::SizeBytes,
-        video::{Bitrate, Framerate, Resolution, VideoCodec, VideoProperties},
+        video::{Bitrate, DurationSecs, Framerate, Resolution, VideoCodec, VideoProperties},
     },
     probe::{error::FfprobeError, output::StreamType, FfprobeOutput},
 };
@@ -48,12 +48,20 @@ impl TryFrom<FfprobeOutput> for VideoProperties {
             .and_then(|s| s.parse::<u64>().map_err(|_| FfprobeError::MissingSizeBytes))
             .and_then(|v| SizeBytes::new(v).map_err(FfprobeError::from))?;
 
+        let duration = value
+            .format
+            .duration
+            .as_deref()
+            .and_then(|s| s.parse::<f64>().ok())
+            .and_then(|secs| DurationSecs::new(secs).ok());
+
         Ok(Self {
             video_codec,
             resolution,
             bitrate,
             framerate,
             size_bytes,
+            duration,
         })
     }
 }

@@ -6,10 +6,17 @@ use tracing::{info, instrument};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
-    config::Config, listener::PostgresListener, probe::FFmpeg, providers::JellyfinProvider,
-    store::MediaStore, sync::SyncOrchestrator, workflow::WorkflowOrchestrator,
+    analysis::{AnalysisOrchestrator, TakeTranscodeDecisionService},
+    config::{AnalysisConfig, Config},
+    listener::PostgresListener,
+    probe::FFmpeg,
+    providers::JellyfinProvider,
+    store::MediaStore,
+    sync::SyncOrchestrator,
+    workflow::WorkflowOrchestrator,
 };
 
+mod analysis;
 mod config;
 mod listener;
 pub mod models;
@@ -42,7 +49,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let postgres_listener = PostgresListener::new(pool.clone(), tx);
     let listener_handle = tokio::spawn(postgres_listener.listen());
 
-    let workflow_orchestrator = WorkflowOrchestrator::new(rx, store.clone(), FFmpeg);
+    let analysis_config = AnalysisConfig::from_env();
+    let decision_service = TakeTranscodeDecisionService::new(
+        analysis_config.min_size_per_hour_gb,
+        analysis_config.min_bpp,
+        analysis_config.min_compression_potential,
+    );
+    let analysis_orchestrator = AnalysisOrchestrator::new(store.clone(), decision_service);
+    let workflow_orchestrator =
+        WorkflowOrchestrator::new(rx, store.clone(), FFmpeg, analysis_orchestrator);
     let workflow_handle = tokio::spawn(workflow_orchestrator.run());
 
     let provider = JellyfinProvider::new(&cfg.jellyfin_url, &cfg.jellyfin_api_key)?;

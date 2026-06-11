@@ -4,6 +4,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, instrument, warn};
 
 use crate::{
+    analysis::AnalysisOrchestrator,
     models::{media_file::MediaFileId, workflow::WorkflowStateTag},
     probe::FFmpeg,
     store::MediaStore,
@@ -12,7 +13,8 @@ use crate::{
 pub struct WorkflowOrchestrator {
     rx: mpsc::Receiver<MediaFileId>,
     media_store: Arc<MediaStore>,
-    ffmpeg: FFmpeg,
+    _ffmpeg: FFmpeg,
+    analysis_orchestrator: AnalysisOrchestrator,
 }
 
 impl WorkflowOrchestrator {
@@ -20,11 +22,13 @@ impl WorkflowOrchestrator {
         rx: mpsc::Receiver<MediaFileId>,
         media_store: Arc<MediaStore>,
         ffmpeg: FFmpeg,
+        analysis_orchestrator: AnalysisOrchestrator,
     ) -> Self {
         Self {
             rx,
             media_store,
-            ffmpeg,
+            _ffmpeg: ffmpeg,
+            analysis_orchestrator,
         }
     }
 
@@ -58,7 +62,19 @@ impl WorkflowOrchestrator {
                         continue;
                     };
                 }
-                WorkflowStateTag::Probed => {}
+                WorkflowStateTag::Probed => {
+                    if let Err(error) =
+                        self.analysis_orchestrator.analyze(&media_file).await
+                    {
+                        error!(%error, ?media_file_id, "analysis failed");
+                    }
+                }
+                WorkflowStateTag::Analyzed
+                | WorkflowStateTag::PendingApproval
+                | WorkflowStateTag::Transcoding
+                | WorkflowStateTag::Done
+                | WorkflowStateTag::Skipped
+                | WorkflowStateTag::Failed => {}
             }
         }
         info!("event channel closed, shutting down workflow orchestrator");

@@ -6,6 +6,7 @@ pub mod event;
 pub mod media_file;
 pub mod movie;
 pub mod series;
+pub mod transcode;
 pub mod video;
 pub mod workflow;
 

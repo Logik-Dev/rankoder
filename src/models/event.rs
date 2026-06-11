@@ -1,10 +1,22 @@
 use serde::{Deserialize, Serialize};
 
+use crate::models::transcode::SkipReason;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MediaEvent {
     Discovered { source: String },
     Probed,
+    Analyzed {
+        bpp: f64,
+        compression_potential: f64,
+        crf: u8,
+    },
+    Skipped {
+        reason: SkipReason,
+        bpp: Option<f64>,
+        compression_potential: Option<f64>,
+    },
 }
 
 #[cfg(test)]

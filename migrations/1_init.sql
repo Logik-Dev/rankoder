@@ -141,6 +141,7 @@ CREATE TABLE media_files (
     width           INTEGER,
     bitrate_kbps    INTEGER,
     framerate       TEXT,
+    duration_seconds DOUBLE PRECISION,
 
     -- État du workflow + décision figée
     workflow_state  workflow_state  NOT NULL DEFAULT 'discovered',

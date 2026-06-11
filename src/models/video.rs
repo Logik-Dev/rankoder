@@ -11,6 +11,7 @@ pub struct VideoProperties {
     pub bitrate: Option<Bitrate>,
     pub framerate: Option<Framerate>,
     pub size_bytes: SizeBytes,
+    pub duration: Option<DurationSecs>,
 }
 
 impl VideoProperties {
@@ -155,5 +156,26 @@ impl Framerate {
 impl Display for Framerate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.numerator, self.denominator)
+    }
+}
+
+// DurationSecs
+#[derive(Debug)]
+pub struct DurationSecs(f64);
+
+impl DurationSecs {
+    pub fn new(secs: f64) -> Result<Self, DomainError> {
+        if secs <= 0.0 {
+            return Err(DomainError::InvalidDuration);
+        }
+        Ok(Self(secs))
+    }
+
+    pub fn as_secs_f64(&self) -> f64 {
+        self.0
+    }
+
+    pub fn as_hours_f64(&self) -> f64 {
+        self.0 / 3600.0
     }
 }

@@ -15,4 +15,5 @@ pub(super) struct MediaFileRow {
     pub width: Option<i32>,
     pub bitrate_kbps: Option<i32>,
     pub framerate: Option<String>,
+    pub duration_seconds: Option<f64>,
 }
