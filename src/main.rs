@@ -50,9 +50,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel(100);
     let store = Arc::new(MediaStore::new(pool.clone()));
 
-    let postgres_listener = PostgresListener::new(pool.clone(), tx);
-    let listener_handle = tokio::spawn(postgres_listener.listen());
-
     let analysis_config = AnalysisConfig::from_env();
     let decision_service = TakeTranscodeDecisionService::new(
         analysis_config.min_size_per_hour_gb,
@@ -78,6 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         approval_orchestrator,
     );
     let workflow_handle = tokio::spawn(workflow_orchestrator.run());
+
+    let postgres_listener = PostgresListener::new(pool.clone(), store.clone(), tx);
+    let listener_handle = tokio::spawn(postgres_listener.listen());
 
     let provider = JellyfinProvider::new(&cfg.jellyfin_url, &cfg.jellyfin_api_key)?;
 

@@ -176,6 +176,16 @@ impl MediaStore {
         Ok(row.rating)
     }
 
+    pub async fn fetch_active_media_files(&self) -> Result<Vec<MediaFileId>, StoreError> {
+        let rows = sqlx::query!(
+            r#"SELECT id FROM media_files WHERE workflow_state NOT IN ('done', 'skipped', 'failed')"#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
+    }
+
     pub async fn transition(
         &self,
         media_file_id: &MediaFileId,
