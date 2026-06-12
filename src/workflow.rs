@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 use anyhow::Result;
 use tokio::sync::mpsc;
@@ -53,6 +53,8 @@ impl WorkflowOrchestrator {
         let approval = self.approval_orchestrator;
         let mut rx = self.rx;
 
+        let mut pending = VecDeque::new();
+
         loop {
             tokio::select! {
                 biased;
@@ -61,18 +63,17 @@ impl WorkflowOrchestrator {
                     break;
                 }
                 Some(media_file_id) = rx.recv() => {
-                    let permit = semaphore
-                        .clone()
-                        .acquire_owned()
-                        .await
-                        .expect("semaphore closed");
+                    pending.push_back(media_file_id);
+                }
+                permit = semaphore.clone().acquire_owned(), if !pending.is_empty() => {
+                    let media_file_id = pending.pop_front().unwrap();
+                    let _permit = permit.expect("semaphore closed");
                     let s = Arc::clone(&store);
                     let p = Arc::clone(&prober);
                     let a = analysis.clone();
                     let ap = Arc::clone(&approval);
 
                     join_set.spawn(async move {
-                        let _permit = permit;
                         if let Err(e) = Self::process_file(s, p, a, ap, media_file_id).await {
                             error!(%e, "failed to process file");
                         }
