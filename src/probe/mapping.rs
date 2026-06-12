@@ -5,7 +5,7 @@ use crate::{
         media_file::SizeBytes,
         video::{Bitrate, DurationSecs, Framerate, Resolution, VideoCodec, VideoProperties},
     },
-    probe::{error::FfprobeError, output::StreamType, FfprobeOutput},
+    probe::{FfprobeOutput, error::FfprobeError, output::StreamType},
 };
 
 impl TryFrom<FfprobeOutput> for VideoProperties {

@@ -5,7 +5,9 @@ use crate::models::transcode::SkipReason;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MediaEvent {
-    Discovered { source: String },
+    Discovered {
+        source: String,
+    },
     Probed,
     Analyzed {
         bpp: f64,
@@ -17,6 +19,9 @@ pub enum MediaEvent {
         bpp: Option<f64>,
         compression_potential: Option<f64>,
     },
+    PendingApproval,
+    ApprovalGranted,
+    ApprovalRejected,
 }
 
 #[cfg(test)]

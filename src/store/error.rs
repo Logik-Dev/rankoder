@@ -1,4 +1,4 @@
-use crate::models::error::DomainError;
+use crate::models::{error::DomainError, workflow::WorkflowStateTag};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -8,4 +8,6 @@ pub enum StoreError {
     EventSerialization(#[from] serde_json::Error),
     #[error(transparent)]
     Domain(#[from] DomainError),
+    #[error("stale state: expected {expected:?}, but row was already advanced")]
+    StaleState { expected: WorkflowStateTag },
 }

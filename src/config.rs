@@ -46,3 +46,23 @@ fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> T {
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
 }
+
+#[derive(Debug, Clone)]
+pub struct MqttConfig {
+    /// MQTT broker hostname (MQTT_HOST)
+    pub host: String,
+    /// MQTT broker port (MQTT_PORT, default 1883)
+    pub port: u16,
+    /// MQTT client identifier (MQTT_CLIENT_ID, default "rankoder")
+    pub client_id: String,
+}
+
+impl MqttConfig {
+    pub fn from_env() -> Result<Self> {
+        Ok(Self {
+            host: env::var("MQTT_HOST")?,
+            port: parse_env("MQTT_PORT", 1883),
+            client_id: env::var("MQTT_CLIENT_ID").unwrap_or_else(|_| "rankoder".to_string()),
+        })
+    }
+}

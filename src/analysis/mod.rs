@@ -6,8 +6,8 @@ use anyhow::Result;
 use tracing::{instrument, warn};
 
 use crate::{
-    models::{media_file::MediaFile, transcode::{SkipReason, TranscodeDecision}},
-    store::MediaStore,
+    models::media_file::MediaFile,
+    store::{MediaStore, error::StoreError},
 };
 
 pub use decision::TakeTranscodeDecisionService;
@@ -34,18 +34,17 @@ impl AnalysisOrchestrator {
 
         let decision = self.decision_service.execute(media_file, rating);
 
-        // Guard skips mean the file is already in a non-probed state — no state change needed
-        if let TranscodeDecision::Skip(
-            SkipReason::TranscodeInProgress | SkipReason::AlreadyTranscoded,
-        ) = &decision
-        {
-            warn!("analysis triggered on non-probed file, skipping state update");
-            return Ok(());
-        }
-
-        self.store
+        match self
+            .store
             .save_analysis_result(&media_file.id, &decision)
-            .await?;
+            .await
+        {
+            Ok(()) => {}
+            Err(StoreError::StaleState { expected }) => {
+                warn!(?expected, "analysis result already saved by another worker");
+            }
+            Err(e) => return Err(e.into()),
+        }
 
         Ok(())
     }

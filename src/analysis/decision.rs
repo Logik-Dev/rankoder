@@ -3,7 +3,6 @@ use tracing::{debug, instrument};
 use crate::models::{
     media_file::MediaFile,
     transcode::{SkipReason, TranscodeDecision},
-    workflow::WorkflowStateTag,
 };
 
 // With min_compression_potential=1.0 (default), the effective bpp thresholds become:
@@ -30,19 +29,6 @@ impl TakeTranscodeDecisionService {
     pub fn execute(&self, file: &MediaFile, tmdb_rating: Option<f32>) -> TranscodeDecision {
         debug!("taking transcode decision");
 
-        if matches!(
-            file.workflow_state,
-            WorkflowStateTag::Analyzed
-                | WorkflowStateTag::PendingApproval
-                | WorkflowStateTag::Transcoding
-        ) {
-            return TranscodeDecision::Skip(SkipReason::TranscodeInProgress);
-        }
-
-        if file.workflow_state == WorkflowStateTag::Done {
-            return TranscodeDecision::Skip(SkipReason::AlreadyTranscoded);
-        }
-
         let Some(vp) = &file.video_properties else {
             return TranscodeDecision::Skip(SkipReason::MissingProbeData);
         };
@@ -68,8 +54,7 @@ impl TakeTranscodeDecisionService {
             return TranscodeDecision::Skip(SkipReason::AlreadyCompressed);
         }
 
-        let resolution_factor =
-            resolution_factor(vp.resolution.height(), vp.resolution.width());
+        let resolution_factor = resolution_factor(vp.resolution.height(), vp.resolution.width());
         let compression_potential =
             (bpp - self.min_bpp) * POTENTIAL_SCALE_FACTOR * resolution_factor as f64;
 

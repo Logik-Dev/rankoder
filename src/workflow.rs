@@ -5,9 +5,10 @@ use tracing::{error, info, instrument, warn};
 
 use crate::{
     analysis::AnalysisOrchestrator,
+    approval::ApprovalOrchestrator,
     models::{media_file::MediaFileId, workflow::WorkflowStateTag},
     probe::FFmpeg,
-    store::MediaStore,
+    store::{MediaStore, error::StoreError},
 };
 
 pub struct WorkflowOrchestrator {
@@ -15,6 +16,7 @@ pub struct WorkflowOrchestrator {
     media_store: Arc<MediaStore>,
     _ffmpeg: FFmpeg,
     analysis_orchestrator: AnalysisOrchestrator,
+    approval_orchestrator: Arc<ApprovalOrchestrator>,
 }
 
 impl WorkflowOrchestrator {
@@ -23,12 +25,14 @@ impl WorkflowOrchestrator {
         media_store: Arc<MediaStore>,
         ffmpeg: FFmpeg,
         analysis_orchestrator: AnalysisOrchestrator,
+        approval_orchestrator: Arc<ApprovalOrchestrator>,
     ) -> Self {
         Self {
             rx,
             media_store,
             _ffmpeg: ffmpeg,
             analysis_orchestrator,
+            approval_orchestrator,
         }
     }
 
@@ -53,24 +57,37 @@ impl WorkflowOrchestrator {
                         }
                     };
 
-                    if let Err(error) = self
+                    match self
                         .media_store
                         .insert_probe_data(&media_file_id, &video_properties)
                         .await
                     {
-                        error!(%error, ?media_file_id, "failed to save probe data");
-                        continue;
-                    };
+                        Ok(()) => {}
+                        Err(StoreError::StaleState { expected }) => {
+                            warn!(
+                                ?media_file_id,
+                                ?expected,
+                                "probe data already inserted by another worker, skipping"
+                            );
+                            continue;
+                        }
+                        Err(error) => {
+                            error!(%error, ?media_file_id, "failed to save probe data");
+                            continue;
+                        }
+                    }
                 }
                 WorkflowStateTag::Probed => {
-                    if let Err(error) =
-                        self.analysis_orchestrator.analyze(&media_file).await
-                    {
+                    if let Err(error) = self.analysis_orchestrator.analyze(&media_file).await {
                         error!(%error, ?media_file_id, "analysis failed");
                     }
                 }
-                WorkflowStateTag::Analyzed
-                | WorkflowStateTag::PendingApproval
+                WorkflowStateTag::Analyzed => {
+                    if let Err(error) = self.approval_orchestrator.send_request(&media_file).await {
+                        error!(%error, ?media_file_id, "failed to send approval request");
+                    }
+                }
+                WorkflowStateTag::PendingApproval
                 | WorkflowStateTag::Transcoding
                 | WorkflowStateTag::Done
                 | WorkflowStateTag::Skipped

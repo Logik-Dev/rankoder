@@ -7,8 +7,10 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 
 use crate::{
     analysis::{AnalysisOrchestrator, TakeTranscodeDecisionService},
-    config::{AnalysisConfig, Config},
+    approval::ApprovalOrchestrator,
+    config::{AnalysisConfig, Config, MqttConfig},
     listener::PostgresListener,
+    notification::mqtt::MqttNotifier,
     probe::FFmpeg,
     providers::JellyfinProvider,
     store::MediaStore,
@@ -17,9 +19,11 @@ use crate::{
 };
 
 mod analysis;
+mod approval;
 mod config;
 mod listener;
 pub mod models;
+mod notification;
 mod probe;
 pub mod providers;
 pub mod store;
@@ -56,8 +60,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         analysis_config.min_compression_potential,
     );
     let analysis_orchestrator = AnalysisOrchestrator::new(store.clone(), decision_service);
-    let workflow_orchestrator =
-        WorkflowOrchestrator::new(rx, store.clone(), FFmpeg, analysis_orchestrator);
+
+    let mqtt_config = MqttConfig::from_env()?;
+    let notifier = Arc::new(MqttNotifier::new(
+        &mqtt_config.host,
+        mqtt_config.port,
+        &mqtt_config.client_id,
+    ));
+    let approval_orchestrator = Arc::new(ApprovalOrchestrator::new(store.clone(), notifier));
+    let approval_handle = tokio::spawn(Arc::clone(&approval_orchestrator).run_response_listener());
+
+    let workflow_orchestrator = WorkflowOrchestrator::new(
+        rx,
+        store.clone(),
+        FFmpeg,
+        analysis_orchestrator,
+        approval_orchestrator,
+    );
     let workflow_handle = tokio::spawn(workflow_orchestrator.run());
 
     let provider = JellyfinProvider::new(&cfg.jellyfin_url, &cfg.jellyfin_api_key)?;
@@ -76,6 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         res = workflow_handle => {
             info!("workflow stopped: {:?}", res);
+        }
+        res = approval_handle => {
+            info!("approval listener stopped: {:?}", res);
         }
     }
 

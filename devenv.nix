@@ -22,6 +22,9 @@ in
 
     PGPORT = lib.mkForce pgPort;
     PGHOST = pgSocketDir;
+
+    MQTT_HOST = "localhost";
+    MQTT_PORT = "1883";
   };
 
   packages = [
