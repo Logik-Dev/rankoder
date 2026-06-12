@@ -6,15 +6,14 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::{
-    models::{error::DomainError, media_file::MediaFileId},
-    store::MediaStore,
-};
+use crate::{models::media_file::MediaFileId, store::MediaStore};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EventNotification {
+    #[allow(dead_code)]
     pub event_id: i64,
-    pub media_file_id: String,
+    pub media_file_id: Uuid,
+    #[allow(dead_code)]
     pub event_type: String,
 }
 
@@ -60,24 +59,8 @@ impl PostgresListener {
 
         loop {
             let notif = listener.recv().await?;
-            let payload: serde_json::Value = serde_json::from_str(notif.payload())?;
-
-            let media_file_id = match payload["media_file_id"]
-                .as_str()
-                .and_then(|s| Uuid::parse_str(s).ok())
-                .ok_or(DomainError::MissingUuid)
-                .map(MediaFileId::from)
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    warn!(
-                        payload = %payload,
-                        error = %e,
-                        "failed to parse notification payload, skipping"
-                    );
-                    continue;
-                }
-            };
+            let notification: EventNotification = serde_json::from_str(notif.payload())?;
+            let media_file_id = MediaFileId::from(notification.media_file_id);
 
             if self.tx.send(media_file_id).await.is_err() {
                 info!("notification channel closed, shutting down listener");
