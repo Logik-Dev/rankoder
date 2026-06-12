@@ -88,7 +88,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     join_set.spawn(postgres_listener.listen(token.child_token()));
     join_set.spawn(workflow_orchestrator.run(token.child_token()));
-    join_set.spawn(approval_orchestrator.run_response_listener(token.child_token()));
+    join_set.spawn(
+        approval_orchestrator
+            .clone()
+            .run_response_listener(token.child_token()),
+    );
+    join_set.spawn(approval_orchestrator.run_stale_checker(token.child_token(), 5));
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {

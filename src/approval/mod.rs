@@ -27,6 +27,35 @@ impl ApprovalOrchestrator {
 
     #[instrument(skip(self, media_file), fields(id = ?media_file.id), err)]
     pub async fn send_request(&self, media_file: &MediaFile) -> Result<()> {
+        let request = self.build_request(media_file).await?;
+
+        match self
+            .store
+            .transition(
+                &media_file.id,
+                WorkflowStateTag::Analyzed,
+                WorkflowStateTag::PendingApproval,
+                &MediaEvent::PendingApproval,
+            )
+            .await
+        {
+            Ok(()) => {}
+            Err(StoreError::StaleState { expected }) => {
+                warn!(?expected, "approval already pending for this file");
+            }
+            Err(e) => return Err(e.into()),
+        }
+        self.publish_request(&request).await?;
+
+        Ok(())
+    }
+
+    pub async fn resend_request(&self, media_file: &MediaFile) -> Result<()> {
+        let request = self.build_request(media_file).await?;
+        self.publish_request(&request).await
+    }
+
+    async fn build_request(&self, media_file: &MediaFile) -> Result<ApprovalRequest> {
         let info = self.store.fetch_approval_info(&media_file.id).await?;
 
         let Some(vp) = &media_file.video_properties else {
@@ -46,7 +75,7 @@ impl ApprovalOrchestrator {
             );
         };
 
-        let request = ApprovalRequest {
+        Ok(ApprovalRequest {
             media_file_id: media_file.id.as_uuid(),
             title: info
                 .title
@@ -58,27 +87,14 @@ impl ApprovalOrchestrator {
             compression_potential,
             crf: crf as u8,
             tmdb_rating: info.tmdb_rating,
-        };
+        })
+    }
 
-        match self
-            .store
-            .transition(
-                &media_file.id,
-                WorkflowStateTag::Analyzed,
-                WorkflowStateTag::PendingApproval,
-                &MediaEvent::PendingApproval,
-            )
+    async fn publish_request(&self, request: &ApprovalRequest) -> Result<()> {
+        self.notifier
+            .request_approval(request)
             .await
-        {
-            Ok(()) => {}
-            Err(StoreError::StaleState { expected }) => {
-                warn!(?expected, "approval already pending for this file");
-            }
-            Err(e) => return Err(e.into()),
-        }
-        self.notifier.request_approval(&request).await?;
-
-        Ok(())
+            .map_err(Into::into)
     }
 
     #[instrument(skip(self), fields(media_file_id = %response.media_file_id, approved = response.approved), err)]
@@ -151,6 +167,36 @@ impl ApprovalOrchestrator {
 
             if let Err(e) = self.handle_response(response).await {
                 error!("failed to handle approval response: {e}");
+            }
+        }
+    }
+
+    pub async fn run_stale_checker(
+        self: Arc<Self>,
+        token: CancellationToken,
+        threshold_minutes: u64,
+    ) -> Result<()> {
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(threshold_minutes * 60));
+        loop {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => return Ok(()),
+                _ = interval.tick() => {
+                    let ids = self
+                        .store
+                        .fetch_stale_pending_approvals(threshold_minutes as i32)
+                        .await?;
+
+                    for id in ids {
+                        let Ok(media_file) = self.store.find_media_file_by_id(&id).await else {
+                            continue;
+                        };
+                        if let Err(e) = self.resend_request(&media_file).await {
+                            error!(?id, %e, "failed to resend approval request");
+                        }
+                    }
+                }
             }
         }
     }

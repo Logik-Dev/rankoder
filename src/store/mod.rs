@@ -305,6 +305,22 @@ impl MediaStore {
         }
     }
 
+    pub async fn fetch_stale_pending_approvals(
+        &self,
+        threshold_minutes: i32,
+    ) -> Result<Vec<MediaFileId>, StoreError> {
+        let rows = sqlx::query!(
+            r#"SELECT id FROM media_files
+               WHERE workflow_state = 'pending_approval'
+                 AND updated_at < NOW() - make_interval(mins => $1)"#,
+            threshold_minutes,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
+    }
+
     pub async fn fetch_approval_info(
         &self,
         media_file_id: &MediaFileId,
