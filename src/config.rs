@@ -1,68 +1,77 @@
 use std::env;
 
-use anyhow::Result;
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("missing required environment variable: {0}")]
+    Missing(String),
+    #[error("invalid value for {key}: '{value}' — {reason}")]
+    InvalidValue {
+        key: String,
+        value: String,
+        reason: String,
+    },
+}
 
 #[derive(Debug, Clone)]
-pub struct Config {
+pub struct AppConfig {
     pub jellyfin_url: String,
     pub jellyfin_api_key: String,
-}
-
-impl Config {
-    pub fn from_env() -> Result<Self> {
-        let jellyfin_url = env::var("JELLYFIN_URL")?;
-        let jellyfin_api_key = env::var("JELLYFIN_API_KEY")?;
-
-        Ok(Self {
-            jellyfin_url,
-            jellyfin_api_key,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AnalysisConfig {
-    /// Minimum GB per hour of content — normalises episodes vs movies (MIN_ANALYSIS_SIZE_PER_HOUR_GB, default 2.0)
+    pub database_url: String,
+    pub auto_migrate: bool,
     pub min_size_per_hour_gb: f64,
-    /// Minimum bits-per-pixel threshold — files below are already compressed (MIN_ANALYSIS_BPP, default 0.04)
     pub min_bpp: f64,
-    /// Minimum compression potential score to trigger encoding (MIN_COMPRESSION_POTENTIAL, default 1.0)
     pub min_compression_potential: f64,
+    pub mqtt_host: String,
+    pub mqtt_port: u16,
+    pub mqtt_client_id: String,
 }
 
-impl AnalysisConfig {
-    pub fn from_env() -> Self {
-        Self {
-            min_size_per_hour_gb: parse_env("MIN_ANALYSIS_SIZE_PER_HOUR_GB", 2.0),
-            min_bpp: parse_env("MIN_ANALYSIS_BPP", 0.04),
-            min_compression_potential: parse_env("MIN_COMPRESSION_POTENTIAL", 1.0),
-        }
+impl AppConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Ok(Self {
+            jellyfin_url: env::var("JELLYFIN_URL")
+                .map_err(|_| ConfigError::Missing("JELLYFIN_URL".into()))?,
+            jellyfin_api_key: env::var("JELLYFIN_API_KEY")
+                .map_err(|_| ConfigError::Missing("JELLYFIN_API_KEY".into()))?,
+            database_url: env::var("DATABASE_URL")
+                .map_err(|_| ConfigError::Missing("DATABASE_URL".into()))?,
+            auto_migrate: parse_bool_env("AUTO_MIGRATE", false)?,
+            min_size_per_hour_gb: parse_env("MIN_ANALYSIS_SIZE_PER_HOUR_GB", 2.0)?,
+            min_bpp: parse_env("MIN_ANALYSIS_BPP", 0.04)?,
+            min_compression_potential: parse_env("MIN_COMPRESSION_POTENTIAL", 1.0)?,
+            mqtt_host: env::var("MQTT_HOST")
+                .map_err(|_| ConfigError::Missing("MQTT_HOST".into()))?,
+            mqtt_port: parse_env("MQTT_PORT", 1883)?,
+            mqtt_client_id: parse_env("MQTT_CLIENT_ID", "rankoder".to_string())?,
+        })
     }
 }
 
-fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> T {
-    env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> Result<T, ConfigError>
+where
+    T::Err: std::fmt::Display,
+{
+    match env::var(key) {
+        Ok(v) => v.parse().map_err(|e: T::Err| ConfigError::InvalidValue {
+            key: key.into(),
+            value: v,
+            reason: e.to_string(),
+        }),
+        Err(_) => Ok(default),
+    }
 }
 
-#[derive(Debug, Clone)]
-pub struct MqttConfig {
-    /// MQTT broker hostname (MQTT_HOST)
-    pub host: String,
-    /// MQTT broker port (MQTT_PORT, default 1883)
-    pub port: u16,
-    /// MQTT client identifier (MQTT_CLIENT_ID, default "rankoder")
-    pub client_id: String,
-}
-
-impl MqttConfig {
-    pub fn from_env() -> Result<Self> {
-        Ok(Self {
-            host: env::var("MQTT_HOST")?,
-            port: parse_env("MQTT_PORT", 1883),
-            client_id: env::var("MQTT_CLIENT_ID").unwrap_or_else(|_| "rankoder".to_string()),
-        })
+fn parse_bool_env(key: &str, default: bool) -> Result<bool, ConfigError> {
+    match env::var(key) {
+        Ok(v) => match v.as_str() {
+            "1" => Ok(true),
+            "0" => Ok(false),
+            _ => Err(ConfigError::InvalidValue {
+                key: key.into(),
+                value: v,
+                reason: "expected 1 or 0".into(),
+            }),
+        },
+        Err(_) => Ok(default),
     }
 }

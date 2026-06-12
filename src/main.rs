@@ -8,7 +8,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 use crate::{
     analysis::{AnalysisOrchestrator, TakeTranscodeDecisionService},
     approval::ApprovalOrchestrator,
-    config::{AnalysisConfig, Config, MqttConfig},
+    config::AppConfig,
     listener::PostgresListener,
     notification::mqtt::MqttNotifier,
     probe::FFmpeg,
@@ -35,14 +35,14 @@ mod workflow;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
-    let cfg = Config::from_env()?;
+    let cfg = AppConfig::from_env()?;
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect(&std::env::var("DATABASE_URL")?)
+        .connect(&cfg.database_url)
         .await?;
 
-    if std::env::var("AUTO_MIGRATE").is_ok_and(|v| v == "1") {
+    if cfg.auto_migrate {
         sqlx::migrate!("./migrations").run(&pool).await?;
         info!("migrations applied");
     }
@@ -50,19 +50,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel(100);
     let store = Arc::new(MediaStore::new(pool.clone()));
 
-    let analysis_config = AnalysisConfig::from_env();
     let decision_service = TakeTranscodeDecisionService::new(
-        analysis_config.min_size_per_hour_gb,
-        analysis_config.min_bpp,
-        analysis_config.min_compression_potential,
+        cfg.min_size_per_hour_gb,
+        cfg.min_bpp,
+        cfg.min_compression_potential,
     );
     let analysis_orchestrator = AnalysisOrchestrator::new(store.clone(), decision_service);
 
-    let mqtt_config = MqttConfig::from_env()?;
     let notifier = Arc::new(MqttNotifier::new(
-        &mqtt_config.host,
-        mqtt_config.port,
-        &mqtt_config.client_id,
+        &cfg.mqtt_host,
+        cfg.mqtt_port,
+        &cfg.mqtt_client_id,
     ));
     let approval_orchestrator = Arc::new(ApprovalOrchestrator::new(store.clone(), notifier));
     let approval_handle = tokio::spawn(Arc::clone(&approval_orchestrator).run_response_listener());
