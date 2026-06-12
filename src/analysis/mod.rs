@@ -12,6 +12,7 @@ use crate::{
 
 pub use decision::TakeTranscodeDecisionService;
 
+#[derive(Clone)]
 pub struct AnalysisOrchestrator {
     store: Arc<MediaStore>,
     decision_service: TakeTranscodeDecisionService,

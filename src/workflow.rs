@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use anyhow::Result;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tracing::{error, info, instrument, warn};
 
 use crate::{
@@ -14,7 +16,7 @@ use crate::{
 pub struct WorkflowOrchestrator {
     rx: mpsc::Receiver<MediaFileId>,
     media_store: Arc<MediaStore>,
-    prober: Box<dyn Prober>,
+    prober: Arc<dyn Prober>,
     analysis_orchestrator: AnalysisOrchestrator,
     approval_orchestrator: Arc<ApprovalOrchestrator>,
 }
@@ -23,7 +25,7 @@ impl WorkflowOrchestrator {
     pub fn new(
         rx: mpsc::Receiver<MediaFileId>,
         media_store: Arc<MediaStore>,
-        prober: Box<dyn Prober>,
+        prober: Arc<dyn Prober>,
         analysis_orchestrator: AnalysisOrchestrator,
         approval_orchestrator: Arc<ApprovalOrchestrator>,
     ) -> Self {
@@ -37,88 +39,139 @@ impl WorkflowOrchestrator {
     }
 
     #[instrument(skip(self), err)]
-    pub async fn run(mut self) -> anyhow::Result<()> {
-        info!("starting workflow orchestrator");
+    pub async fn run(self) -> anyhow::Result<()> {
+        let concurrency = std::thread::available_parallelism()?.get();
+        info!(concurrency, "starting workflow orchestrator");
 
-        while let Some(media_file_id) = self.rx.recv().await {
-            let Ok(media_file) = self.media_store.find_media_file_by_id(&media_file_id).await
-            else {
-                error!(?media_file_id, "failed to find media file on database");
-                continue;
-            };
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut join_set = JoinSet::new();
 
-            match media_file.workflow_state {
-                WorkflowStateTag::Discovered => {
-                    let video_properties = match self.prober.probe(&media_file.path).await {
-                        Ok(v) => v,
-                        Err(error) => {
-                            warn!(?media_file_id, %error, "failed to probe media file");
-                            match self
-                                .media_store
-                                .transition(
-                                    &media_file_id,
-                                    WorkflowStateTag::Discovered,
-                                    WorkflowStateTag::Failed,
-                                    &MediaEvent::ProbeFailed {
-                                        error: error.to_string(),
-                                    },
-                                )
-                                .await
-                            {
-                                Ok(()) => {}
-                                Err(StoreError::StaleState { expected }) => {
-                                    warn!(
-                                        ?media_file_id,
-                                        ?expected,
-                                        "probe already processed by another worker"
-                                    );
-                                }
-                                Err(e) => {
-                                    error!(%e, ?media_file_id, "failed to save probe failure");
-                                }
-                            }
-                            continue;
-                        }
-                    };
+        let store = self.media_store;
+        let prober = self.prober;
+        let analysis = self.analysis_orchestrator;
+        let approval = self.approval_orchestrator;
+        let mut rx = self.rx;
 
-                    match self
-                        .media_store
-                        .insert_probe_data(&media_file_id, &video_properties)
+        loop {
+            tokio::select! {
+                biased;
+                Some(media_file_id) = rx.recv() => {
+                    let permit = semaphore
+                        .clone()
+                        .acquire_owned()
                         .await
-                    {
-                        Ok(()) => {}
-                        Err(StoreError::StaleState { expected }) => {
-                            warn!(
-                                ?media_file_id,
-                                ?expected,
-                                "probe data already inserted by another worker, skipping"
-                            );
-                            continue;
+                        .expect("semaphore closed");
+                    let s = Arc::clone(&store);
+                    let p = Arc::clone(&prober);
+                    let a = analysis.clone();
+                    let ap = Arc::clone(&approval);
+
+                    join_set.spawn(async move {
+                        let _permit = permit;
+                        if let Err(e) = Self::process_file(s, p, a, ap, media_file_id).await {
+                            error!(%e, "failed to process file");
                         }
-                        Err(error) => {
-                            error!(%error, ?media_file_id, "failed to save probe data");
-                            continue;
-                        }
+                    });
+                }
+                Some(res) = join_set.join_next() => {
+                    if let Err(e) = res {
+                        error!("worker task panicked: {e}");
                     }
                 }
-                WorkflowStateTag::Probed => {
-                    if let Err(error) = self.analysis_orchestrator.analyze(&media_file).await {
-                        error!(%error, ?media_file_id, "analysis failed");
-                    }
-                }
-                WorkflowStateTag::Analyzed => {
-                    if let Err(error) = self.approval_orchestrator.send_request(&media_file).await {
-                        error!(%error, ?media_file_id, "failed to send approval request");
-                    }
-                }
-                WorkflowStateTag::PendingApproval
-                | WorkflowStateTag::Transcoding
-                | WorkflowStateTag::Done
-                | WorkflowStateTag::Skipped
-                | WorkflowStateTag::Failed => {}
+                else => break,
             }
         }
+
+        while let Some(res) = join_set.join_next().await {
+            if let Err(e) = res {
+                error!("worker task panicked: {e}");
+            }
+        }
+
         info!("event channel closed, shutting down workflow orchestrator");
+        Ok(())
+    }
+
+    #[instrument(skip(store, prober, analysis, approval), fields(id = ?media_file_id), err)]
+    async fn process_file(
+        store: Arc<MediaStore>,
+        prober: Arc<dyn Prober>,
+        analysis: AnalysisOrchestrator,
+        approval: Arc<ApprovalOrchestrator>,
+        media_file_id: MediaFileId,
+    ) -> Result<()> {
+        let Ok(media_file) = store.find_media_file_by_id(&media_file_id).await else {
+            error!(?media_file_id, "failed to find media file on database");
+            return Ok(());
+        };
+
+        match media_file.workflow_state {
+            WorkflowStateTag::Discovered => {
+                let video_properties = match prober.probe(&media_file.path).await {
+                    Ok(v) => v,
+                    Err(error) => {
+                        warn!(?media_file_id, %error, "failed to probe media file");
+                        match store
+                            .transition(
+                                &media_file_id,
+                                WorkflowStateTag::Discovered,
+                                WorkflowStateTag::Failed,
+                                &MediaEvent::ProbeFailed {
+                                    error: error.to_string(),
+                                },
+                            )
+                            .await
+                        {
+                            Ok(()) => {}
+                            Err(StoreError::StaleState { expected }) => {
+                                warn!(
+                                    ?media_file_id,
+                                    ?expected,
+                                    "probe already processed by another worker"
+                                );
+                            }
+                            Err(e) => {
+                                error!(%e, ?media_file_id, "failed to save probe failure");
+                            }
+                        }
+                        return Ok(());
+                    }
+                };
+
+                match store
+                    .insert_probe_data(&media_file_id, &video_properties)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(StoreError::StaleState { expected }) => {
+                        warn!(
+                            ?media_file_id,
+                            ?expected,
+                            "probe data already inserted by another worker, skipping"
+                        );
+                    }
+                    Err(error) => {
+                        error!(%error, ?media_file_id, "failed to save probe data");
+                    }
+                }
+            }
+            WorkflowStateTag::Probed => {
+                if let Err(error) = analysis.analyze(&media_file).await {
+                    error!(%error, ?media_file_id, "analysis failed");
+                }
+            }
+            WorkflowStateTag::Analyzed => {
+                if let Err(error) = approval.send_request(&media_file).await {
+                    error!(%error, ?media_file_id, "failed to send approval request");
+                }
+            }
+            WorkflowStateTag::PendingApproval
+            | WorkflowStateTag::Transcoding
+            | WorkflowStateTag::Done
+            | WorkflowStateTag::Skipped
+            | WorkflowStateTag::Failed => {}
+        }
+
         Ok(())
     }
 }

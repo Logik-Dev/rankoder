@@ -10,6 +10,7 @@ use crate::models::{
 //   4K    (factor 3.0): bpp > min_bpp + 0.033  (~14.4 Mbps at 4K24)
 const POTENTIAL_SCALE_FACTOR: f64 = 10.0;
 
+#[derive(Clone)]
 pub struct TakeTranscodeDecisionService {
     min_size_per_hour_gb: f64,
     min_bpp: f64,
