@@ -9,6 +9,9 @@ pub enum MediaEvent {
         source: String,
     },
     Probed,
+    ProbeFailed {
+        error: String,
+    },
     Analyzed {
         bpp: f64,
         compression_potential: f64,

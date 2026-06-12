@@ -19,6 +19,7 @@ impl WorkflowStateTag {
         use WorkflowStateTag as S;
         Some(match (self, event) {
             (S::Discovered, E::Probed) => S::Probed,
+            (S::Discovered, E::ProbeFailed { .. }) => S::Failed,
             (S::Probed, E::Analyzed { .. }) => S::Analyzed,
             (S::Probed, E::Skipped { .. }) => S::Skipped,
             (S::Analyzed, E::PendingApproval) => S::PendingApproval,

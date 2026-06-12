@@ -6,7 +6,7 @@ use tracing::{error, info, instrument, warn};
 use crate::{
     analysis::AnalysisOrchestrator,
     approval::ApprovalOrchestrator,
-    models::{media_file::MediaFileId, workflow::WorkflowStateTag},
+    models::{event::MediaEvent, media_file::MediaFileId, workflow::WorkflowStateTag},
     probe::FFmpeg,
     store::{MediaStore, error::StoreError},
 };
@@ -53,6 +53,30 @@ impl WorkflowOrchestrator {
                         Ok(v) => v,
                         Err(error) => {
                             warn!(?media_file_id, %error, "failed to probe media file");
+                            match self
+                                .media_store
+                                .transition(
+                                    &media_file_id,
+                                    WorkflowStateTag::Discovered,
+                                    WorkflowStateTag::Failed,
+                                    &MediaEvent::ProbeFailed {
+                                        error: error.to_string(),
+                                    },
+                                )
+                                .await
+                            {
+                                Ok(()) => {}
+                                Err(StoreError::StaleState { expected }) => {
+                                    warn!(
+                                        ?media_file_id,
+                                        ?expected,
+                                        "probe already processed by another worker"
+                                    );
+                                }
+                                Err(e) => {
+                                    error!(%e, ?media_file_id, "failed to save probe failure");
+                                }
+                            }
                             continue;
                         }
                     };
