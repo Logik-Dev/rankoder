@@ -54,6 +54,7 @@ impl MqttNotifier {
                     Ok(_) => {}
                     Err(e) => {
                         warn!("MQTT connection error: {e}");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                 }
             }
