@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let workflow_orchestrator = WorkflowOrchestrator::new(
         rx,
         store.clone(),
-        FFmpeg,
+        Box::new(FFmpeg),
         analysis_orchestrator,
         approval_orchestrator,
     );

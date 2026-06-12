@@ -7,14 +7,14 @@ use crate::{
     analysis::AnalysisOrchestrator,
     approval::ApprovalOrchestrator,
     models::{event::MediaEvent, media_file::MediaFileId, workflow::WorkflowStateTag},
-    probe::FFmpeg,
+    probe::Prober,
     store::{MediaStore, error::StoreError},
 };
 
 pub struct WorkflowOrchestrator {
     rx: mpsc::Receiver<MediaFileId>,
     media_store: Arc<MediaStore>,
-    _ffmpeg: FFmpeg,
+    prober: Box<dyn Prober>,
     analysis_orchestrator: AnalysisOrchestrator,
     approval_orchestrator: Arc<ApprovalOrchestrator>,
 }
@@ -23,14 +23,14 @@ impl WorkflowOrchestrator {
     pub fn new(
         rx: mpsc::Receiver<MediaFileId>,
         media_store: Arc<MediaStore>,
-        ffmpeg: FFmpeg,
+        prober: Box<dyn Prober>,
         analysis_orchestrator: AnalysisOrchestrator,
         approval_orchestrator: Arc<ApprovalOrchestrator>,
     ) -> Self {
         Self {
             rx,
             media_store,
-            _ffmpeg: ffmpeg,
+            prober,
             analysis_orchestrator,
             approval_orchestrator,
         }
@@ -49,7 +49,7 @@ impl WorkflowOrchestrator {
 
             match media_file.workflow_state {
                 WorkflowStateTag::Discovered => {
-                    let video_properties = match FFmpeg::probe(&media_file.path).await {
+                    let video_properties = match self.prober.probe(&media_file.path).await {
                         Ok(v) => v,
                         Err(error) => {
                             warn!(?media_file_id, %error, "failed to probe media file");
