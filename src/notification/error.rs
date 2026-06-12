@@ -6,6 +6,4 @@ pub enum NotifierError {
     Serialize(#[from] serde_json::Error),
     #[error("mqtt client error: {0}")]
     Client(String),
-    #[error("mqtt connection error: {0}")]
-    Connection(String),
 }
