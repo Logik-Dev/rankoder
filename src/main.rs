@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use sqlx::postgres::PgPoolOptions;
 use tokio::sync::mpsc;
-use tracing::{info, instrument};
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, instrument};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
@@ -63,19 +65,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cfg.mqtt_client_id,
     ));
     let approval_orchestrator = Arc::new(ApprovalOrchestrator::new(store.clone(), notifier));
-    let approval_handle = tokio::spawn(Arc::clone(&approval_orchestrator).run_response_listener());
 
     let workflow_orchestrator = WorkflowOrchestrator::new(
         rx,
         store.clone(),
         Arc::new(FFmpeg),
         analysis_orchestrator,
-        approval_orchestrator,
+        approval_orchestrator.clone(),
     );
-    let workflow_handle = tokio::spawn(workflow_orchestrator.run());
 
     let postgres_listener = PostgresListener::new(pool.clone(), store.clone(), tx);
-    let listener_handle = tokio::spawn(postgres_listener.listen());
 
     let provider = JellyfinProvider::new(&cfg.jellyfin_url, &cfg.jellyfin_api_key)?;
 
@@ -84,18 +83,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("sync complete, waiting for Ctrl+C to stop");
 
+    let token = CancellationToken::new();
+    let mut join_set = JoinSet::new();
+
+    join_set.spawn(postgres_listener.listen(token.child_token()));
+    join_set.spawn(workflow_orchestrator.run(token.child_token()));
+    join_set.spawn(approval_orchestrator.run_response_listener(token.child_token()));
+
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             info!("shutting down");
+            token.cancel();
         }
-        res = listener_handle => {
-            info!("listener stopped: {:?}", res);
+        res = join_set.join_next() => {
+            match res {
+                Some(Ok(Err(task_error))) => error!("task failed: {task_error}"),
+                Some(Err(join_error)) => error!("task panicked: {join_error}"),
+                Some(Ok(Ok(()))) => info!("task completed normally"),
+                None => {}
+            }
+            token.cancel();
         }
-        res = workflow_handle => {
-            info!("workflow stopped: {:?}", res);
-        }
-        res = approval_handle => {
-            info!("approval listener stopped: {:?}", res);
+    }
+
+    while let Some(res) = join_set.join_next().await {
+        match res {
+            Ok(Err(task_error)) => error!("task failed during drain: {task_error}"),
+            Err(join_error) => error!("task panicked during drain: {join_error}"),
+            Ok(Ok(())) => {}
         }
     }
 

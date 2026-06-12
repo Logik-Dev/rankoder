@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use tokio::sync::mpsc;
-use tracing::{error, instrument, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, instrument, warn};
 
 use crate::{
     models::{
@@ -121,7 +122,7 @@ impl ApprovalOrchestrator {
         Ok(())
     }
 
-    pub async fn run_response_listener(self: Arc<Self>) -> Result<()> {
+    pub async fn run_response_listener(self: Arc<Self>, token: CancellationToken) -> Result<()> {
         let (tx, mut rx) = mpsc::channel::<ApprovalResponse>(32);
         let notifier = Arc::clone(&self.notifier);
 
@@ -131,12 +132,26 @@ impl ApprovalOrchestrator {
             }
         });
 
-        while let Some(response) = rx.recv().await {
+        loop {
+            let response = {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        info!("approval listener cancelled, shutting down");
+                        return Ok(());
+                    }
+                    response = rx.recv() => {
+                        match response {
+                            Some(r) => r,
+                            None => return Ok(()),
+                        }
+                    }
+                }
+            };
+
             if let Err(e) = self.handle_response(response).await {
                 error!("failed to handle approval response: {e}");
             }
         }
-
-        Ok(())
     }
 }

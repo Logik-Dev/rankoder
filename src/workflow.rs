@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, warn};
 
 use crate::{
@@ -39,7 +40,7 @@ impl WorkflowOrchestrator {
     }
 
     #[instrument(skip(self), err)]
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub async fn run(self, token: CancellationToken) -> anyhow::Result<()> {
         let concurrency = std::thread::available_parallelism()?.get();
         info!(concurrency, "starting workflow orchestrator");
 
@@ -55,6 +56,10 @@ impl WorkflowOrchestrator {
         loop {
             tokio::select! {
                 biased;
+                _ = token.cancelled() => {
+                    info!("workflow cancelled, draining remaining tasks");
+                    break;
+                }
                 Some(media_file_id) = rx.recv() => {
                     let permit = semaphore
                         .clone()

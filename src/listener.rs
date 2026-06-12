@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use serde::Deserialize;
 use sqlx::postgres::{PgListener, PgPool};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -28,9 +29,13 @@ impl PostgresListener {
         Self { pool, store, tx }
     }
 
-    pub async fn listen(self) -> anyhow::Result<()> {
+    pub async fn listen(self, token: CancellationToken) -> anyhow::Result<()> {
         loop {
-            if let Err(e) = self.run_listener().await {
+            if token.is_cancelled() {
+                info!("listener cancelled, shutting down");
+                return Ok(());
+            }
+            if let Err(e) = self.run_listener(&token).await {
                 warn!(error = %e, "Postgres listener error, reconnecting in 1s");
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -50,7 +55,7 @@ impl PostgresListener {
         Ok(())
     }
 
-    async fn run_listener(&self) -> anyhow::Result<()> {
+    async fn run_listener(&self, token: &CancellationToken) -> anyhow::Result<()> {
         let mut listener = PgListener::connect_with(&self.pool).await?;
         listener.listen("media_event").await?;
         info!("listening on media_event channel");
@@ -58,7 +63,19 @@ impl PostgresListener {
         self.catch_up().await?;
 
         loop {
-            let notif = listener.recv().await?;
+            let notif = {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        info!("listener cancelled during recv");
+                        return Ok(());
+                    }
+                    notif = listener.recv() => {
+                        notif?
+                    }
+                }
+            };
+
             let notification: EventNotification = serde_json::from_str(notif.payload())?;
             let media_file_id = MediaFileId::from(notification.media_file_id);
 
