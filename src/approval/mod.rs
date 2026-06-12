@@ -32,6 +32,19 @@ impl ApprovalOrchestrator {
             bail!("missing video properties for {:?}", media_file.id);
         };
 
+        let Some(crf) = info.crf else {
+            bail!(
+                "missing crf in transcode_spec for analyzed file {:?}",
+                media_file.id
+            );
+        };
+        let Some(compression_potential) = info.compression_potential else {
+            bail!(
+                "missing compression_potential in transcode_spec for analyzed file {:?}",
+                media_file.id
+            );
+        };
+
         let request = ApprovalRequest {
             media_file_id: media_file.id.as_uuid(),
             title: info
@@ -41,8 +54,8 @@ impl ApprovalOrchestrator {
             codec: vp.video_codec.as_ref().to_string(),
             resolution: format!("{}x{}", vp.resolution.width(), vp.resolution.height()),
             size_gb: vp.size_bytes.as_gb(),
-            compression_potential: info.compression_potential.unwrap_or(0.0),
-            crf: info.crf.unwrap_or(24) as u8,
+            compression_potential,
+            crf: crf as u8,
             tmdb_rating: info.tmdb_rating,
         };
 

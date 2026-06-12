@@ -232,7 +232,11 @@ impl MediaStore {
                 crf,
             } => {
                 let mut tx = self.pool.begin().await?;
-                let spec = serde_json::json!({ "crf": crf });
+                let spec = serde_json::json!({
+                    "crf": crf,
+                    "bpp": bpp,
+                    "compression_potential": compression_potential,
+                });
                 let result = sqlx::query!(
                     r#"
                         UPDATE media_files
@@ -311,14 +315,8 @@ impl MediaStore {
                     COALESCE(e.title, m.title) AS title,
                     COALESCE(e.rating, m.rating) AS tmdb_rating,
                     (mf.transcode_spec->>'crf')::integer AS crf,
-                    (
-                        SELECT (ev.event->>'compression_potential')::double precision
-                        FROM events ev
-                        WHERE ev.media_file_id = mf.id
-                          AND ev.event->>'type' = 'analyzed'
-                        ORDER BY ev.created_at DESC
-                        LIMIT 1
-                    ) AS compression_potential
+                    (mf.transcode_spec->>'bpp')::double precision AS bpp,
+                    (mf.transcode_spec->>'compression_potential')::double precision AS compression_potential
                 FROM media_files mf
                 LEFT JOIN episodes e ON mf.episode_id = e.id
                 LEFT JOIN movies   m ON mf.movie_id   = m.id
@@ -333,6 +331,7 @@ impl MediaStore {
             title: row.title,
             tmdb_rating: row.tmdb_rating,
             crf: row.crf,
+            bpp: row.bpp,
             compression_potential: row.compression_potential,
         })
     }
@@ -342,5 +341,6 @@ pub struct ApprovalInfo {
     pub title: Option<String>,
     pub tmdb_rating: Option<f32>,
     pub crf: Option<i32>,
+    pub bpp: Option<f64>,
     pub compression_potential: Option<f64>,
 }
