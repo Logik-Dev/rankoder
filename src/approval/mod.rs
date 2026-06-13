@@ -62,12 +62,6 @@ impl ApprovalOrchestrator {
             bail!("missing video properties for {:?}", media_file.id);
         };
 
-        let Some(crf) = info.crf else {
-            bail!(
-                "missing crf in transcode_spec for analyzed file {:?}",
-                media_file.id
-            );
-        };
         let Some(compression_potential) = info.compression_potential else {
             bail!(
                 "missing compression_potential in transcode_spec for analyzed file {:?}",
@@ -75,17 +69,20 @@ impl ApprovalOrchestrator {
             );
         };
 
+        let size_gb = vp.size_bytes.as_gb();
+        let clamped_potential = compression_potential.clamp(0.0, 1.0);
+        let estimated_size_gb = size_gb * (1.0 - clamped_potential);
+        let space_saved_gb = size_gb - estimated_size_gb;
+
         Ok(ApprovalRequest {
             media_file_id: media_file.id.as_uuid(),
             title: info
                 .title
                 .unwrap_or_else(|| media_file.path.as_ref().to_string_lossy().into_owned()),
-            path: media_file.path.as_ref().to_string_lossy().into_owned(),
-            codec: vp.video_codec.as_ref().to_string(),
-            resolution: format!("{}x{}", vp.resolution.width(), vp.resolution.height()),
-            size_gb: vp.size_bytes.as_gb(),
-            compression_potential,
-            crf: crf as u8,
+            size_gb: round_1dp(size_gb),
+            estimated_size_gb: round_1dp(estimated_size_gb),
+            space_saved_gb: round_1dp(space_saved_gb),
+            compression_potential: round_1dp(clamped_potential),
             tmdb_rating: info.tmdb_rating,
         })
     }
@@ -210,4 +207,8 @@ impl ApprovalOrchestrator {
             }
         }
     }
+}
+
+fn round_1dp(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
 }

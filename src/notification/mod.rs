@@ -12,12 +12,10 @@ pub use error::NotifierError;
 pub struct ApprovalRequest {
     pub media_file_id: Uuid,
     pub title: String,
-    pub path: String,
-    pub codec: String,
-    pub resolution: String,
     pub size_gb: f64,
+    pub estimated_size_gb: f64,
+    pub space_saved_gb: f64,
     pub compression_potential: f64,
-    pub crf: u8,
     pub tmdb_rating: Option<f32>,
 }
 
