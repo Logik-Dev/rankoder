@@ -183,14 +183,24 @@ impl ApprovalOrchestrator {
                 biased;
                 _ = token.cancelled() => return Ok(()),
                 _ = interval.tick() => {
-                    let ids = self
+                    let ids = match self
                         .store
                         .fetch_stale_pending_approvals(threshold_minutes as i32)
-                        .await?;
+                        .await {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!("failed to fetch stale pending approvals: {e}");
+                                continue;
+                            }
+                        };
 
                     for id in ids {
-                        let Ok(media_file) = self.store.find_media_file_by_id(&id).await else {
-                            continue;
+                        let media_file = match self.store.find_media_file_by_id(&id).await {
+                            Ok(m) => m,
+                            Err(e) => {
+                                error!(?id, "failed to find media file : {e}");
+                                continue;
+                            }
                         };
                         if let Err(e) = self.resend_request(&media_file).await {
                             error!(?id, %e, "failed to resend approval request");

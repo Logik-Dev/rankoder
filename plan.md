@@ -60,3 +60,39 @@ Le `tokio::select!` sur Ctrl+C sort de `main` sans annuler les tâches — un tr
 ## Par où commencer
 
 Si je devais ordonner : **2 → 5 → 1** forment un tout cohérent (transitions idempotentes centralisées, puis rattrapage au démarrage qui peut rejouer sans danger), ensuite **3** (fiabilité MQTT, critique puisque c'est le point d'approbation humaine), puis le reste au fil de l'eau. Dis-moi si tu veux que j'implémente un de ces blocs.
+
+
+
+  Deux vrais problèmes restants, tous côté MQTT
+
+  1. La souscription est perdue après une reconnexion (bug).
+  listen_responses souscrit une seule fois au démarrage. rumqttc reconnecte automatiquement au prochain poll() après une coupure, mais avec clean_session = true (le défaut de MqttOptions), le broker oublie la
+  souscription à la reconnexion — et personne ne re-souscrit. Résultat : après la première coupure réseau/redémarrage du broker, les réponses d'approbation n'arrivent plus jamais, silencieusement. Le fix standard :
+  dans la boucle driver de MqttNotifier::new, re-souscrire sur chaque Event::Incoming(Packet::ConnAck(_)) (ce qui couvre aussi la souscription initiale, et tu peux alors retirer le subscribe de listen_responses).
+
+  2. Pas de backoff dans la boucle driver.
+  Sur erreur de connexion persistante (broker down), eventloop.poll() retourne Err immédiatement à chaque itération → busy-loop qui mange un cœur et inonde les logs de warnings. Ajoute un
+  tokio::time::sleep(Duration::from_secs(1)) dans la branche Err, comme tu l'as fait pour PostgresListener.
+
+  Points mineurs (à noter, pas bloquants)
+
+  - ApprovalInfo.bpp est fetché mais jamais lu (ApprovalRequest n'a pas de champ bpp) — code mort à retirer ou champ à exposer.
+  - Dans la boucle du workflow, le acquire_owned().await est dans le corps de la branche recv : si tous les permits sont pris, la cancellation n'est observée qu'après obtention d'un permit. Sans conséquence avec des
+  ffprobes courts, mais à garder en tête quand les tâches deviendront des transcodages de 2h.
+  - Un fichier en pending_approval dont la réponse MQTT se perd reste bloqué pour toujours (le catch-up le re-énumère mais le workflow l'ignore). À terme : un timeout qui re-publie la demande, ou un état "stale
+  approval".
+  - La tâche driver MQTT spawnée dans new() est détachée — elle ne participe pas au shutdown gracieux. Acceptable aujourd'hui (le process exit la tue), mais incohérent avec le reste.
+  - Le dernier point de ma revue reste ouvert : decision.rs est pur et testable, et il n'y a toujours que les 2 tests serde. C'est le meilleur ratio effort/valeur pour démarrer la suite de tests.
+
+  Si tu corriges le point 1 (re-souscription sur ConnAck) et le backoff, la couche MQTT sera au niveau du reste. Dis-moi si tu veux que je m'en charge.
+
+
+  Broutilles
+
+  - La VecDeque pending est non bornée : la backpressure que fournissait le canal mpsc(100) a disparu, le listener peut maintenant y déverser tout le catch-up d'un coup. Comme ce ne sont que des UUID (16 octets),
+  c'est négligeable en pratique — juste à savoir.
+  - Le seuil de staleness est codé en dur (5 dans main.rs:96) alors que tous les autres seuils sont dans AppConfig. À déplacer pour rester cohérent (APPROVAL_STALE_MINUTES ?).
+  - ApprovalInfo.bpp est toujours fetché et jamais lu — toujours du code mort.
+  - Les tests unitaires de decision.rs manquent toujours — ça reste le meilleur point d'entrée pour la suite de tests.
+
+  Le seul point qui mérite une correction avant de continuer, c'est le ? du stale checker. Tu veux que je le corrige (et éventuellement les broutilles avec) ?
