@@ -93,6 +93,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .clone()
             .run_response_listener(token.child_token()),
     );
+    join_set.spawn(
+        approval_orchestrator
+            .clone()
+            .run_approval_feeder(token.child_token(), cfg.approval_max_pending),
+    );
     join_set.spawn(approval_orchestrator.run_stale_checker(token.child_token(), 5));
 
     tokio::select! {

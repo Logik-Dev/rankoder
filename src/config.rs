@@ -24,6 +24,7 @@ pub struct AppConfig {
     pub mqtt_host: String,
     pub mqtt_port: u16,
     pub mqtt_client_id: String,
+    pub approval_max_pending: usize,
 }
 
 impl AppConfig {
@@ -43,6 +44,7 @@ impl AppConfig {
                 .map_err(|_| ConfigError::Missing("MQTT_HOST".into()))?,
             mqtt_port: parse_env("MQTT_PORT", 1883)?,
             mqtt_client_id: parse_env("MQTT_CLIENT_ID", "rankoder".to_string())?,
+            approval_max_pending: parse_env("APPROVAL_MAX_PENDING", 1)?,
         })
     }
 }

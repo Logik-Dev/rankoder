@@ -321,6 +321,30 @@ impl MediaStore {
         Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
     }
 
+    pub async fn fetch_oldest_analyzed(&self, limit: i64) -> Result<Vec<MediaFileId>, StoreError> {
+        let rows = sqlx::query!(
+            r#"SELECT id FROM media_files
+               WHERE workflow_state = 'analyzed'
+               ORDER BY updated_at ASC
+               LIMIT $1"#,
+            limit,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
+    }
+
+    pub async fn count_pending_approvals(&self) -> Result<i64, StoreError> {
+        let row = sqlx::query!(
+            r#"SELECT COUNT(*) as count FROM media_files WHERE workflow_state = 'pending_approval'"#
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.count.unwrap_or(0))
+    }
+
     pub async fn fetch_approval_info(
         &self,
         media_file_id: &MediaFileId,

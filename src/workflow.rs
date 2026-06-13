@@ -167,9 +167,7 @@ impl WorkflowOrchestrator {
                 }
             }
             WorkflowStateTag::Analyzed => {
-                if let Err(error) = approval.send_request(&media_file).await {
-                    error!(%error, ?media_file_id, "failed to send approval request");
-                }
+                approval.wake_feeder();
             }
             WorkflowStateTag::PendingApproval
             | WorkflowStateTag::Transcoding

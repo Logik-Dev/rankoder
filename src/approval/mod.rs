@@ -18,11 +18,20 @@ use crate::{
 pub struct ApprovalOrchestrator {
     store: Arc<MediaStore>,
     notifier: Arc<dyn ApprovalNotifier>,
+    wake: tokio::sync::Notify,
 }
 
 impl ApprovalOrchestrator {
     pub fn new(store: Arc<MediaStore>, notifier: Arc<dyn ApprovalNotifier>) -> Self {
-        Self { store, notifier }
+        Self {
+            store,
+            notifier,
+            wake: tokio::sync::Notify::new(),
+        }
+    }
+
+    pub fn wake_feeder(&self) {
+        self.wake.notify_one();
     }
 
     #[instrument(skip(self, media_file), fields(id = ?media_file.id), err)]
@@ -94,6 +103,38 @@ impl ApprovalOrchestrator {
             .map_err(Into::into)
     }
 
+    async fn top_up(&self, capacity: usize) {
+        let pending = match self.store.count_pending_approvals().await {
+            Ok(n) => n,
+            Err(e) => {
+                error!("failed to count pending approvals: {e}");
+                return;
+            }
+        };
+
+        let slots = capacity as i64 - pending;
+        if slots <= 0 {
+            return;
+        }
+
+        let ids = match self.store.fetch_oldest_analyzed(slots).await {
+            Ok(v) => v,
+            Err(e) => {
+                error!("failed to fetch oldest analyzed files: {e}");
+                return;
+            }
+        };
+
+        for id in ids {
+            let Ok(media_file) = self.store.find_media_file_by_id(&id).await else {
+                continue;
+            };
+            if let Err(e) = self.send_request(&media_file).await {
+                error!(?id, %e, "feeder failed to send approval request");
+            }
+        }
+    }
+
     #[instrument(skip(self), fields(media_file_id = %response.media_file_id, approved = response.approved), err)]
     async fn handle_response(&self, response: ApprovalResponse) -> Result<()> {
         let file_id = MediaFileId::from(response.media_file_id);
@@ -132,6 +173,7 @@ impl ApprovalOrchestrator {
                 Err(e) => return Err(e.into()),
             }
         }
+        self.wake.notify_one();
         Ok(())
     }
 
@@ -204,6 +246,22 @@ impl ApprovalOrchestrator {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    pub async fn run_approval_feeder(
+        self: Arc<Self>,
+        token: CancellationToken,
+        capacity: usize,
+    ) -> Result<()> {
+        loop {
+            self.top_up(capacity).await;
+
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => return Ok(()),
+                _ = self.wake.notified() => {}
             }
         }
     }
