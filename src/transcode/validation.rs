@@ -6,10 +6,16 @@ use tokio::process::Command;
 use crate::{
     models::{
         media_file::SizeBytes,
-        video::{DurationSecs, VideoProperties},
+        video::{Bitrate, DurationSecs},
     },
     transcode::error::ValidationError,
 };
+
+#[derive(Debug)]
+pub struct ValidatedOutput {
+    pub size_bytes: SizeBytes,
+    pub bitrate: Option<Bitrate>,
+}
 
 #[derive(Debug, Deserialize)]
 struct RawProbe {
@@ -34,7 +40,7 @@ pub async fn validate_output(
     temp_path: &Path,
     original_duration: Option<f64>,
     tolerance_secs: f64,
-) -> Result<VideoProperties, ValidationError> {
+) -> Result<ValidatedOutput, ValidationError> {
     if !temp_path.exists() {
         return Err(ValidationError::FfprobeFailed(
             "output file does not exist".into(),
@@ -63,7 +69,15 @@ pub async fn validate_output(
         )));
     }
 
-    let raw: RawProbe = serde_json::from_slice(&output.stdout)
+    parse_probe_output(&output.stdout, original_duration, tolerance_secs)
+}
+
+fn parse_probe_output(
+    stdout: &[u8],
+    original_duration: Option<f64>,
+    tolerance_secs: f64,
+) -> Result<ValidatedOutput, ValidationError> {
+    let raw: RawProbe = serde_json::from_slice(stdout)
         .map_err(|e| ValidationError::FfprobeFailed(format!("invalid ffprobe JSON: {e}")))?;
 
     let video_stream = raw
@@ -105,15 +119,108 @@ pub async fn validate_output(
         });
     }
 
-    let video_codec: crate::models::video::VideoCodec = codec_name.parse().unwrap();
-    let resolution = crate::models::video::Resolution::new(0, 0).unwrap();
-
-    Ok(VideoProperties {
-        video_codec,
-        resolution,
-        bitrate: None,
-        framerate: None,
+    Ok(ValidatedOutput {
         size_bytes,
-        duration,
+        bitrate: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_hevc_probe() {
+        let json = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc"}
+            ],
+            "format": {
+                "duration": "3600.000000",
+                "size": "500000000"
+            }
+        }"#;
+
+        let result = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap();
+        assert_eq!(result.size_bytes.as_u64(), 500_000_000);
+    }
+
+    #[test]
+    fn invalid_codec_h264() {
+        let json = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "h264"}
+            ],
+            "format": {
+                "duration": "3600.000000",
+                "size": "500000000"
+            }
+        }"#;
+
+        let err = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap_err();
+        assert!(matches!(err, ValidationError::WrongCodec));
+    }
+
+    #[test]
+    fn duration_mismatch() {
+        let json = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc"}
+            ],
+            "format": {
+                "duration": "3000.000000",
+                "size": "500000000"
+            }
+        }"#;
+
+        let err = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap_err();
+        assert!(matches!(err, ValidationError::DurationMismatch { .. }));
+    }
+
+    #[test]
+    fn missing_size_bytes() {
+        let json = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc"}
+            ],
+            "format": {
+                "duration": "3600.000000"
+            }
+        }"#;
+
+        let err = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap_err();
+        assert!(matches!(err, ValidationError::FfprobeFailed(_)));
+    }
+
+    #[test]
+    fn duration_within_tolerance_is_ok() {
+        let json = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc"}
+            ],
+            "format": {
+                "duration": "3600.500000",
+                "size": "500000000"
+            }
+        }"#;
+
+        let result = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap();
+        assert_eq!(result.size_bytes.as_u64(), 500_000_000);
+    }
+
+    #[test]
+    fn no_original_duration_skips_check() {
+        let json = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc"}
+            ],
+            "format": {
+                "duration": "3000.000000",
+                "size": "500000000"
+            }
+        }"#;
+
+        let result = parse_probe_output(json.as_bytes(), None, 1.0).unwrap();
+        assert_eq!(result.size_bytes.as_u64(), 500_000_000);
+    }
 }
