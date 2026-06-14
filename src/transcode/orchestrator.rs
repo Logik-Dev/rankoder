@@ -291,13 +291,29 @@ impl TranscodeOrchestrator {
 
         // Atomic swap
         let swapper = Swapper::new(RealFileSystem);
-        let result = swapper
+        let result = match swapper
             .atomic_swap(&original_path, &temp_path, retention_dir, media_file_id)
-            .await?;
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                store
+                    .transition(
+                        &media_file_id,
+                        WorkflowStateTag::Transcoding,
+                        WorkflowStateTag::Failed,
+                        &MediaEvent::TranscodeFailed {
+                            error: format!("swap failed: {e}"),
+                        },
+                    )
+                    .await?;
+                return Ok(());
+            }
+        };
 
         let final_abs = AbsoluteFilePath::new(&result.final_path)?;
 
-        store
+        if let Err(e) = store
             .complete_transcode(
                 &media_file_id,
                 &final_abs,
@@ -307,10 +323,13 @@ impl TranscodeOrchestrator {
                 result.retention_path.to_str().unwrap_or(""),
             )
             .await
-            .map_err(|e| {
-                error!(%e, "complete_transcode failed after swap");
-                anyhow::anyhow!("complete_transcode failed: {e}")
-            })?;
+        {
+            error!(
+                %e,
+                "complete_transcode failed after swap; file remains in Transcoding for recovery on next startup"
+            );
+            return Ok(());
+        }
 
         info!(?media_file_id, "transcode completed successfully");
         Ok(())
