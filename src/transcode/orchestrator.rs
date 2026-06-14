@@ -201,7 +201,11 @@ impl TranscodeOrchestrator {
         info!(?original_size, %crf, temp = %temp_path.display(), "starting ffmpeg encode");
 
         // Encode step
-        let mut args = encoder.build_args(crf);
+        let color = media_file
+            .video_properties
+            .as_ref()
+            .and_then(|v| v.color_metadata.as_ref());
+        let mut args = encoder.build_args(crf, color);
         args.insert(0, "-nostdin".into());
         args.insert(0, "-y".into());
 

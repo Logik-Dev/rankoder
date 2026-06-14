@@ -18,7 +18,7 @@ use crate::{
         video::{Bitrate, VideoProperties},
         workflow::WorkflowStateTag,
     },
-    store::{dto::MediaFileRow, error::StoreError},
+    store::{dto::ColorMetadataRow, dto::MediaFileRow, error::StoreError},
 };
 
 pub mod dto;
@@ -109,7 +109,19 @@ impl MediaStore {
         .fetch_one(&self.pool)
         .await?;
 
-        row.try_into()
+        let color_row = sqlx::query_as!(
+            ColorMetadataRow,
+            r#"
+                SELECT color_primaries, color_trc, colorspace, master_display, max_cll
+                FROM video_color_metadata
+                WHERE media_file_id = $1
+            "#,
+            media_file_id.as_uuid(),
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        (row, color_row).try_into()
     }
 
     pub async fn insert_probe_data(
@@ -143,6 +155,30 @@ impl MediaStore {
             return Err(StoreError::StaleState {
                 expected: WorkflowStateTag::Discovered,
             });
+        }
+
+        if let Some(cm) = &video_properties.color_metadata {
+            sqlx::query!(
+                r#"
+                    INSERT INTO video_color_metadata
+                        (media_file_id, color_primaries, color_trc, colorspace, master_display, max_cll)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (media_file_id) DO UPDATE SET
+                        color_primaries = EXCLUDED.color_primaries,
+                        color_trc = EXCLUDED.color_trc,
+                        colorspace = EXCLUDED.colorspace,
+                        master_display = EXCLUDED.master_display,
+                        max_cll = EXCLUDED.max_cll
+                "#,
+                media_file_id.as_uuid(),
+                cm.color_primaries.as_str(),
+                cm.color_trc.as_str(),
+                cm.colorspace.as_str(),
+                cm.master_display.as_deref(),
+                cm.max_cll.as_deref(),
+            )
+            .execute(&mut *tx)
+            .await?;
         }
 
         let event = MediaEvent::Probed;

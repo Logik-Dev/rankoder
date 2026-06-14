@@ -4,15 +4,33 @@ use crate::{
     models::{
         common::AbsoluteFilePath,
         media_file::{MediaFile, SizeBytes},
-        video::{Bitrate, DurationSecs, Framerate, Resolution, VideoCodec, VideoProperties},
+        video::{
+            Bitrate, ColorMetadata, DurationSecs, Framerate, Resolution, VideoCodec,
+            VideoProperties,
+        },
     },
-    store::{dto::MediaFileRow, error::StoreError},
+    store::{dto::ColorMetadataRow, dto::MediaFileRow, error::StoreError},
 };
 
-impl TryFrom<MediaFileRow> for MediaFile {
+fn color_md_from_row(row: &ColorMetadataRow) -> Option<ColorMetadata> {
+    let cp = row.color_primaries.as_ref()?;
+    let ct = row.color_trc.as_ref()?;
+    let cs = row.colorspace.as_ref()?;
+    Some(ColorMetadata {
+        color_primaries: cp.clone(),
+        color_trc: ct.clone(),
+        colorspace: cs.clone(),
+        master_display: row.master_display.clone(),
+        max_cll: row.max_cll.clone(),
+    })
+}
+
+impl TryFrom<(MediaFileRow, Option<ColorMetadataRow>)> for MediaFile {
     type Error = StoreError;
 
-    fn try_from(value: MediaFileRow) -> Result<Self, Self::Error> {
+    fn try_from(
+        (value, color_row): (MediaFileRow, Option<ColorMetadataRow>),
+    ) -> Result<Self, Self::Error> {
         let id = value.id.into();
         let episode_id = value.episode_id.map(Into::into);
         let movie_id = value.movie_id.map(Into::into);
@@ -49,6 +67,8 @@ impl TryFrom<MediaFileRow> for MediaFile {
             .duration_seconds
             .and_then(|s| DurationSecs::new(s).ok());
 
+        let color_metadata = color_row.as_ref().and_then(color_md_from_row);
+
         let video_properties = match (video_codec, resolution, size_bytes) {
             (Some(video_codec), Some(resolution), Some(size_bytes)) => Some(VideoProperties {
                 video_codec,
@@ -57,6 +77,7 @@ impl TryFrom<MediaFileRow> for MediaFile {
                 bitrate,
                 framerate,
                 duration,
+                color_metadata,
             }),
             _ => None,
         };

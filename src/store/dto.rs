@@ -18,3 +18,12 @@ pub(super) struct MediaFileRow {
     pub duration_seconds: Option<f64>,
     pub transcode_spec: Option<serde_json::Value>,
 }
+
+#[derive(sqlx::FromRow)]
+pub(super) struct ColorMetadataRow {
+    pub color_primaries: Option<String>,
+    pub color_trc: Option<String>,
+    pub colorspace: Option<String>,
+    pub master_display: Option<String>,
+    pub max_cll: Option<String>,
+}

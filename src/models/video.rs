@@ -4,6 +4,54 @@ use std::{convert::Infallible, fmt::Display, str::FromStr};
 use crate::models::{error::DomainError, media_file::SizeBytes};
 
 // VideoProperties
+#[derive(Debug, Clone)]
+pub struct MasterDisplay {
+    pub green: (u32, u32),
+    pub blue: (u32, u32),
+    pub red: (u32, u32),
+    pub white_point: (u32, u32),
+    pub luminance: (u32, u32),
+}
+
+impl MasterDisplay {
+    pub fn to_x265_string(&self) -> String {
+        format!(
+            "G({},{})B({},{})R({},{})WP({},{})L({},{})",
+            self.green.0,
+            self.green.1,
+            self.blue.0,
+            self.blue.1,
+            self.red.0,
+            self.red.1,
+            self.white_point.0,
+            self.white_point.1,
+            self.luminance.0,
+            self.luminance.1,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MaxCll {
+    pub max_content: u16,
+    pub max_average: u16,
+}
+
+impl MaxCll {
+    pub fn to_x265_string(&self) -> String {
+        format!("{},{}", self.max_content, self.max_average)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ColorMetadata {
+    pub color_primaries: String,
+    pub color_trc: String,
+    pub colorspace: String,
+    pub master_display: Option<String>,
+    pub max_cll: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct VideoProperties {
     pub video_codec: VideoCodec,
@@ -12,6 +60,7 @@ pub struct VideoProperties {
     pub framerate: Option<Framerate>,
     pub size_bytes: SizeBytes,
     pub duration: Option<DurationSecs>,
+    pub color_metadata: Option<ColorMetadata>,
 }
 
 impl VideoProperties {
