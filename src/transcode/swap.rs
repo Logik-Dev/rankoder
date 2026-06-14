@@ -56,7 +56,7 @@ impl<FS: FileSystem> Swapper<FS> {
             .and_then(|n| n.to_str())
             .unwrap_or("file");
 
-        let retention_path = retention_dir.join(format!("{media_file_id:?}_{filename}"));
+        let retention_path = retention_dir.join(format!("{}_{filename}", media_file_id.as_uuid()));
         let final_path = original
             .parent()
             .unwrap_or_else(|| Path::new("."))

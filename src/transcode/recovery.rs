@@ -46,7 +46,7 @@ pub async fn recover_stuck_transcode(
         .and_then(|n| n.to_str())
         .unwrap_or("file");
 
-    let retention_path = retention_dir.join(format!("{media_file_id:?}_{filename}"));
+    let retention_path = retention_dir.join(format!("{}_{filename}", media_file_id.as_uuid()));
     let final_path = original_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -141,7 +141,7 @@ mod tests {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file");
-        let retention_path = retention_dir.join(format!("{id:?}_{filename}"));
+        let retention_path = retention_dir.join(format!("{}_{filename}", id.as_uuid()));
 
         std::fs::write(&retention_path, b"original content").unwrap();
 
@@ -162,7 +162,7 @@ mod tests {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file");
-        let retention_path = retention_dir.join(format!("{id:?}_{filename}"));
+        let retention_path = retention_dir.join(format!("{}_{filename}", id.as_uuid()));
         let final_path = base.join("movie.mkv");
 
         std::fs::write(&retention_path, b"original content").unwrap();

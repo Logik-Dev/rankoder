@@ -126,23 +126,37 @@ impl TranscodeOrchestrator {
     ) -> Result<()> {
         let media_file = store.find_media_file_by_id(&media_file_id).await?;
 
-        let video_properties = media_file
-            .video_properties
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no video properties for file {media_file_id:?}"))?;
+        let video_properties = media_file.video_properties.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("no video properties for file {}", media_file_id.as_uuid())
+        })?;
 
         let original_size = video_properties.size_bytes;
         let original_duration = video_properties.duration.as_ref().map(|d| d.as_secs_f64());
 
-        let crf = media_file
+        let crf = match media_file
             .transcode_spec
             .as_ref()
             .and_then(|s| s.get("crf"))
             .and_then(|c| c.as_u64())
             .map(|c| c as u8)
-            .unwrap_or(23);
+        {
+            Some(c) => c,
+            None => {
+                store
+                    .transition(
+                        &media_file_id,
+                        WorkflowStateTag::Transcoding,
+                        WorkflowStateTag::Failed,
+                        &MediaEvent::TranscodeFailed {
+                            error: "missing transcode_spec or crf".into(),
+                        },
+                    )
+                    .await?;
+                return Ok(());
+            }
+        };
 
-        let temp_path = tmp_dir.join(format!("{media_file_id:?}.mkv"));
+        let temp_path = tmp_dir.join(format!("{}.mkv", media_file_id.as_uuid()));
         let original_path = media_file.path.as_ref().to_path_buf();
 
         // Crash recovery: detect if a previous swap completed but the DB
