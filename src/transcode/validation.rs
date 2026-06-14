@@ -43,7 +43,7 @@ pub async fn validate_output(
     original_duration: Option<f64>,
     tolerance_secs: f64,
 ) -> Result<ValidatedOutput, ValidationError> {
-    if !temp_path.exists() {
+    if tokio::fs::metadata(temp_path).await.is_err() {
         return Err(ValidationError::FfprobeFailed(
             "output file does not exist".into(),
         ));

@@ -93,7 +93,7 @@ pub async fn recover_stuck_transcode(
             retention = %retention_path.display(),
             "partial swap detected: final missing, restoring original from retention"
         );
-        std::fs::rename(&retention_path, original_path).map_err(|e| {
+        tokio::fs::rename(&retention_path, original_path).await.map_err(|e| {
             error!(%e, "failed to restore original from retention");
             RecoveryError::Filesystem(e)
         })?;

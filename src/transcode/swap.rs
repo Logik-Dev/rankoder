@@ -92,11 +92,11 @@ impl<FS: FileSystem> Swapper<FS> {
                 TranscodeError::SwapFailed(e)
             })?;
 
-        self.fs.rename(temp, &final_path).await.map_err(|e| {
+        if let Err(e) = self.fs.rename(temp, &final_path).await {
             error!(%e, "failed to rename temp to final, attempting rollback");
-            let _ = std::fs::rename(&retention_path, original);
-            TranscodeError::SwapFailed(e)
-        })?;
+            let _ = tokio::fs::rename(&retention_path, original).await;
+            return Err(TranscodeError::SwapFailed(e));
+        }
 
         Ok(SwapResult {
             final_path,
