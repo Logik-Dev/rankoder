@@ -177,6 +177,7 @@ impl TranscodeOrchestrator {
                 let final_abs = AbsoluteFilePath::new(&final_path)?;
                 return Ok(TranscodeOutcome::Completed(CompletedTranscode {
                     final_path: final_abs,
+                    original_size,
                     new_size: output_vp.size_bytes,
                     bitrate: output_vp.bitrate,
                     retention_path,
@@ -266,6 +267,7 @@ impl TranscodeOrchestrator {
 
         Ok(TranscodeOutcome::Completed(CompletedTranscode {
             final_path: final_abs,
+            original_size,
             new_size,
             bitrate: output_vp.bitrate,
             retention_path: result.retention_path,
@@ -293,37 +295,17 @@ impl TranscodeOrchestrator {
         .await
         {
             Ok(TranscodeOutcome::Completed(c)) => {
-                // `Completed` is only produced when video_properties are present,
-                // so the `None` branch is defensive.
-                match media_file.video_properties.as_ref() {
-                    Some(vp) => {
-                        store
-                            .complete_transcode(
-                                &media_file_id,
-                                &c.final_path,
-                                c.new_size,
-                                c.bitrate.as_ref(),
-                                vp.size_bytes,
-                                c.retention_path.to_str().unwrap_or(""),
-                            )
-                            .await?;
-                        info!(?media_file_id, "transcode completed successfully");
-                    }
-                    None => {
-                        store
-                            .apply_event(
-                                &media_file_id,
-                                WorkflowStateTag::Transcoding,
-                                &MediaEvent::TranscodeFailed {
-                                    error: format!(
-                                        "no video properties for file {}",
-                                        media_file_id.as_uuid()
-                                    ),
-                                },
-                            )
-                            .await?;
-                    }
-                }
+                store
+                    .complete_transcode(
+                        &media_file_id,
+                        &c.final_path,
+                        c.new_size,
+                        c.bitrate.as_ref(),
+                        c.original_size,
+                        c.retention_path.to_str().unwrap_or(""),
+                    )
+                    .await?;
+                info!(?media_file_id, "transcode completed successfully");
             }
             Ok(TranscodeOutcome::Skipped(reason)) => {
                 store

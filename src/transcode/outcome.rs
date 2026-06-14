@@ -19,6 +19,7 @@ pub enum TranscodeOutcome {
 #[derive(Debug)]
 pub struct CompletedTranscode {
     pub final_path: AbsoluteFilePath,
+    pub original_size: SizeBytes,
     pub new_size: SizeBytes,
     pub bitrate: Option<Bitrate>,
     pub retention_path: PathBuf,
