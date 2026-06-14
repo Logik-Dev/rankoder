@@ -28,12 +28,14 @@ struct RawProbe {
 struct RawStream {
     codec_type: String,
     codec_name: Option<String>,
+    bit_rate: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawFormat {
     duration: Option<String>,
     size: Option<String>,
+    bit_rate: Option<String>,
 }
 
 pub async fn validate_output(
@@ -109,6 +111,13 @@ fn parse_probe_output(
         .and_then(|b| SizeBytes::new(b).ok())
         .ok_or_else(|| ValidationError::FfprobeFailed("missing size bytes".into()))?;
 
+    let bitrate = video_stream
+        .bit_rate
+        .as_deref()
+        .or(format.bit_rate.as_deref())
+        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|b| Bitrate::new(b).ok());
+
     if let Some(orig_dur) = original_duration
         && let Some(new_dur) = duration.as_ref().map(|d| d.as_secs_f64())
         && (orig_dur - new_dur).abs() > tolerance_secs
@@ -121,7 +130,7 @@ fn parse_probe_output(
 
     Ok(ValidatedOutput {
         size_bytes,
-        bitrate: None,
+        bitrate,
     })
 }
 
@@ -222,5 +231,54 @@ mod tests {
 
         let result = parse_probe_output(json.as_bytes(), None, 1.0).unwrap();
         assert_eq!(result.size_bytes.as_u64(), 500_000_000);
+    }
+
+    #[test]
+    fn parses_bitrate_from_stream() {
+        let json = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc", "bit_rate": "5000000"}
+            ],
+            "format": {
+                "duration": "3600.000000",
+                "size": "500000000"
+            }
+        }"#;
+
+        let result = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap();
+        assert_eq!(result.bitrate.unwrap().as_bps(), 5_000_000);
+    }
+
+    #[test]
+    fn parses_bitrate_from_format_fallback() {
+        let json = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc"}
+            ],
+            "format": {
+                "duration": "3600.000000",
+                "size": "500000000",
+                "bit_rate": "6000000"
+            }
+        }"#;
+
+        let result = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap();
+        assert_eq!(result.bitrate.unwrap().as_bps(), 6_000_000);
+    }
+
+    #[test]
+    fn bitrate_none_when_absent() {
+        let json = r#"{
+            "streams": [
+                {"codec_type": "video", "codec_name": "hevc"}
+            ],
+            "format": {
+                "duration": "3600.000000",
+                "size": "500000000"
+            }
+        }"#;
+
+        let result = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap();
+        assert!(result.bitrate.is_none());
     }
 }

@@ -14,6 +14,7 @@ use crate::{
     store::MediaStore,
     transcode::{
         encoder::Encoder,
+        recovery::{self, RecoveryAction},
         swap::{RealFileSystem, Swapper},
         validation,
     },
@@ -143,6 +144,59 @@ impl TranscodeOrchestrator {
 
         let temp_path = tmp_dir.join(format!("{media_file_id:?}.mkv"));
         let original_path = media_file.path.as_ref().to_path_buf();
+
+        // Crash recovery: detect if a previous swap completed but the DB
+        // commit was lost, or if the swap was only partially done.
+        let recovery_action = recovery::recover_stuck_transcode(
+            &original_path,
+            media_file_id,
+            retention_dir,
+            original_duration,
+        )
+        .await?;
+
+        match recovery_action {
+            RecoveryAction::ProceedNormally => {
+                // Continue to normal ffmpeg encode below
+            }
+            RecoveryAction::CommitComplete {
+                final_path,
+                retention_path,
+                output_vp,
+            } => {
+                let final_abs = AbsoluteFilePath::new(&final_path)?;
+                store
+                    .complete_transcode(
+                        &media_file_id,
+                        &final_abs,
+                        output_vp.size_bytes,
+                        output_vp.bitrate.as_ref(),
+                        original_size,
+                        retention_path.to_str().unwrap_or(""),
+                    )
+                    .await?;
+                info!(?media_file_id, "recovered: previous swap commited to DB");
+                return Ok(());
+            }
+            RecoveryAction::RestoreAndRetry => {
+                info!(
+                    ?media_file_id,
+                    "recovered: original restored from retention, retrying encode"
+                );
+                // Fall through to normal ffmpeg encode
+            }
+            RecoveryAction::MarkFailed { reason } => {
+                store
+                    .transition(
+                        &media_file_id,
+                        WorkflowStateTag::Transcoding,
+                        WorkflowStateTag::Failed,
+                        &MediaEvent::TranscodeFailed { error: reason },
+                    )
+                    .await?;
+                return Ok(());
+            }
+        }
 
         info!(?original_size, %crf, temp = %temp_path.display(), "starting ffmpeg encode");
 

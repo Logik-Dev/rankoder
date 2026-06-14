@@ -3,5 +3,6 @@ pub mod encoder;
 pub mod error;
 pub mod orchestrator;
 pub mod reaper;
+pub mod recovery;
 pub mod swap;
 pub mod validation;
