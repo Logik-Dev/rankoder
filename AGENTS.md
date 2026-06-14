@@ -22,6 +22,15 @@ Instructions pour les agents de code (OpenCode, etc.) travaillant dans ce dépô
    code / `Cargo.toml` / la doc avant d'écrire. Pas de DSL ni de méthode
    hallucinée.
 
+## Communication
+
+- **Langue du chat : toujours le français.** Toutes les réponses, explications
+  et propositions de commit-messages mises à part, se font en français.
+- **Concision.** Ne pas exposer le raisonnement étape par étape ni narrer
+  chaque action. Aller au résultat : un court résumé de ce qui a été fait suffit.
+- **Langue du code : anglais.** Identifiants, doc-comments (`///`) et messages
+  de commit restent en anglais (conventions Rust + Conventional Commits).
+
 ## Boucle de travail
 
 Pour chaque tâche :
@@ -139,4 +148,5 @@ test(domain): cover Resolution parsing edge cases
 > **Jujutsu (`jj`).** Le message proposé s'applique via
 > `jj describe -m "…"` sur la révision courante, puis `jj new` pour l'étape
 > suivante. Ne **pas** exécuter `jj` / `git` commit sans validation explicite.
-> (Commits en anglais par défaut — localiser si le projet l'exige.)
+> **Les messages de commit sont toujours rédigés en anglais**, quelle que soit
+> la langue du chat.

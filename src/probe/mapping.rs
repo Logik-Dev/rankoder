@@ -25,7 +25,7 @@ impl TryFrom<FfprobeOutput> for VideoProperties {
         let video_stream = value
             .streams
             .iter()
-            .find(|s| matches!(s.codec_type, StreamType::Video))
+            .find(|s| matches!(s.codec_type, StreamType::Video) && !s.is_attached_pic())
             .ok_or(FfprobeError::NoVideoStream)?;
 
         let video_codec = video_stream
@@ -227,5 +227,40 @@ mod tests {
         let vp: VideoProperties = probe.try_into().unwrap();
 
         assert!(vp.color_metadata.is_none());
+    }
+
+    #[test]
+    fn attached_pic_stream_is_skipped() {
+        let json = r#"{
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "mjpeg",
+                    "width": 600,
+                    "height": 600,
+                    "avg_frame_rate": "0/0",
+                    "disposition": { "attached_pic": 1 }
+                },
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1920,
+                    "height": 1080,
+                    "avg_frame_rate": "24000/1001",
+                    "disposition": { "attached_pic": 0 }
+                }
+            ],
+            "format": {
+                "duration": "3600.000000",
+                "size": "10000000000"
+            }
+        }"#;
+
+        let probe: FfprobeOutput = serde_json::from_str(json).unwrap();
+        let vp: VideoProperties = probe.try_into().unwrap();
+
+        assert!(matches!(vp.video_codec, VideoCodec::H264));
+        assert_eq!(vp.resolution.width(), 1920);
+        assert_eq!(vp.resolution.height(), 1080);
     }
 }

@@ -18,7 +18,21 @@ pub(super) struct FfprobeStream {
     pub color_transfer: Option<String>,
     pub color_space: Option<String>,
     #[serde(default)]
+    pub disposition: Disposition,
+    #[serde(default)]
     pub side_data_list: Vec<SideData>,
+}
+
+impl FfprobeStream {
+    pub(super) fn is_attached_pic(&self) -> bool {
+        self.disposition.attached_pic == Some(1)
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct Disposition {
+    #[serde(default)]
+    pub attached_pic: Option<u8>,
 }
 
 #[derive(Deserialize)]
