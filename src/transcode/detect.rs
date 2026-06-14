@@ -3,8 +3,8 @@ use tokio::process::Command;
 use crate::transcode::encoder::Encoder;
 use crate::transcode::error::DetectError;
 
-pub async fn detect_encoder() -> Result<Encoder, DetectError> {
-    if let Some(enc) = Encoder::from_env_override() {
+pub async fn detect_encoder(override_enc: Option<Encoder>) -> Result<Encoder, DetectError> {
+    if let Some(enc) = override_enc {
         return Ok(enc);
     }
 
@@ -48,10 +48,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn env_override_shortcircuits_detection() {
-        unsafe { std::env::set_var("TRANSCODE_ENCODER", "libx265") };
-        let result = detect_encoder().await;
-        unsafe { std::env::remove_var("TRANSCODE_ENCODER") };
+    async fn override_shortcircuits_detection() {
+        let result = detect_encoder(Some(Encoder::Libx265)).await;
         assert_eq!(result.unwrap(), Encoder::Libx265);
+    }
+
+    #[tokio::test]
+    async fn auto_falls_back_to_detection() {
+        let result = detect_encoder(None).await;
+        assert!(result.is_ok());
     }
 }

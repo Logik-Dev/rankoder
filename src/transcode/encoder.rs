@@ -8,9 +8,8 @@ pub enum Encoder {
 }
 
 impl Encoder {
-    pub fn from_env_override() -> Option<Self> {
-        let val = std::env::var("TRANSCODE_ENCODER").ok()?;
-        match val.as_str() {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
             "nvenc" => Some(Self::Nvenc),
             "videotoolbox" => Some(Self::VideoToolbox),
             "libx265" => Some(Self::Libx265),

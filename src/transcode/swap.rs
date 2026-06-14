@@ -9,6 +9,7 @@ use crate::{models::media_file::MediaFileId, transcode::error::TranscodeError};
 pub trait FileSystem: Send + Sync {
     async fn rename(&self, from: &Path, to: &Path) -> Result<(), std::io::Error>;
     async fn remove_file(&self, path: &Path) -> Result<(), std::io::Error>;
+    async fn exists(&self, path: &Path) -> bool;
 }
 
 pub struct RealFileSystem;
@@ -21,6 +22,10 @@ impl FileSystem for RealFileSystem {
 
     async fn remove_file(&self, path: &Path) -> Result<(), std::io::Error> {
         tokio::fs::remove_file(path).await
+    }
+
+    async fn exists(&self, path: &Path) -> bool {
+        tokio::fs::metadata(path).await.is_ok()
     }
 }
 
@@ -71,6 +76,13 @@ impl<FS: FileSystem> Swapper<FS> {
             final_path = %final_path.display(),
             "swapping files"
         );
+
+        if self.fs.exists(&final_path).await && final_path != original {
+            return Err(TranscodeError::SwapFailed(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("destination already exists: {}", final_path.display()),
+            )));
+        }
 
         self.fs
             .rename(original, &retention_path)
@@ -142,6 +154,10 @@ mod tests {
             self.files.lock().await.remove(path);
             Ok(())
         }
+
+        async fn exists(&self, path: &Path) -> bool {
+            self.files.lock().await.contains_key(path)
+        }
     }
 
     #[tokio::test]
@@ -208,6 +224,10 @@ mod tests {
             async fn remove_file(&self, path: &Path) -> Result<(), std::io::Error> {
                 self.inner.remove_file(path).await
             }
+
+            async fn exists(&self, path: &Path) -> bool {
+                self.inner.exists(path).await
+            }
         }
 
         let fail_fs = FailSecondRename {
@@ -228,5 +248,36 @@ mod tests {
         assert!(!mock.exists(&original).await);
         assert!(mock.exists(&temp).await);
         // Rollback uses real std::fs::rename — doesn't affect the mock.
+    }
+
+    #[tokio::test]
+    async fn atomic_swap_fails_when_destination_exists() {
+        let mock = MockFileSystem::new();
+        let original = PathBuf::from("/media/movie.mp4");
+        let temp = PathBuf::from("/tmp/123.mkv");
+        let retention_dir = PathBuf::from("/retention");
+
+        mock.write(original.clone(), b"original content".to_vec())
+            .await;
+        mock.write(temp.clone(), b"new content".to_vec()).await;
+        // Pre-existing file with same stem but .mkv extension
+        let collision = PathBuf::from("/media/movie.mkv");
+        mock.write(collision.clone(), b"pre-existing mkv".to_vec())
+            .await;
+
+        let swapper = Swapper::new(mock.clone_fs());
+        let id = MediaFileId::new();
+        let err = swapper
+            .atomic_swap(&original, &temp, &retention_dir, id)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, TranscodeError::SwapFailed(ref e) if e.kind() == std::io::ErrorKind::AlreadyExists)
+        );
+        // Nothing moved: original, temp, and collision all still in place
+        assert!(mock.exists(&original).await);
+        assert!(mock.exists(&temp).await);
+        assert!(mock.exists(&collision).await);
     }
 }

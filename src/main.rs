@@ -100,7 +100,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Detect encoder at startup
     info!("detecting HEVC encoder...");
-    let encoder = transcode::detect::detect_encoder().await?;
+    let override_enc = if cfg.transcode_encoder_override == "auto" {
+        None
+    } else {
+        Some(
+            transcode::encoder::Encoder::from_str(&cfg.transcode_encoder_override).ok_or_else(
+                || {
+                    format!(
+                        "invalid TRANSCODE_ENCODER: {}",
+                        cfg.transcode_encoder_override
+                    )
+                },
+            )?,
+        )
+    };
+    let encoder = transcode::detect::detect_encoder(override_enc).await?;
     info!(?encoder, "HEVC encoder selected");
 
     let transcode_orchestrator = TranscodeOrchestrator::new(
