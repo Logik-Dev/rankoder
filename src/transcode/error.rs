@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::transcode::recovery::RecoveryError;
+
 #[derive(Debug, Error)]
 pub enum DetectError {
     #[error("no working HEVC encoder found")]
@@ -16,11 +18,16 @@ pub enum TranscodeError {
         exit_code: Option<i32>,
         stderr: String,
     },
+    #[error("video properties missing for media file")]
+    #[allow(dead_code)]
+    MissingVideoProperties,
+    #[error("missing transcode spec or crf")]
+    #[allow(dead_code)]
+    MissingSpec,
     #[error("validation failed: {0}")]
     Validation(#[from] ValidationError),
-    #[error("insufficient size reduction: original {original}, new {new}")]
-    #[allow(dead_code)]
-    InsufficientSizeReduction { original: u64, new: u64 },
+    #[error("recovery failed: {0}")]
+    Recovery(String),
     #[error("swap failed: {0}")]
     SwapFailed(#[from] std::io::Error),
     #[error("store error: {0}")]
@@ -29,6 +36,34 @@ pub enum TranscodeError {
     Probe(#[from] crate::probe::ProbeError),
     #[error("{0}")]
     Domain(#[from] crate::models::error::DomainError),
+}
+
+impl TranscodeError {
+    /// Terminal errors are recorded as `Failed`. Transient errors are propagated
+    /// so that the file remains in `Transcoding` and can be retried.
+    #[allow(dead_code)]
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::FfmpegFailed { .. }
+                | Self::MissingVideoProperties
+                | Self::MissingSpec
+                | Self::Validation(_)
+                | Self::Recovery(_)
+                | Self::SwapFailed(_)
+                | Self::Domain(_)
+        )
+    }
+}
+
+impl From<RecoveryError> for TranscodeError {
+    fn from(e: RecoveryError) -> Self {
+        match e {
+            RecoveryError::Validation(v) => Self::Validation(v),
+            RecoveryError::Filesystem(io) => Self::Recovery(format!("filesystem error: {io}")),
+            RecoveryError::Store(s) => Self::Store(s),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
