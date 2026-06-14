@@ -7,7 +7,6 @@ use crate::models::{
 /// Business outcome of a transcode attempt, before any store-side state
 /// transition is applied.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum TranscodeOutcome {
     Completed(CompletedTranscode),
     Skipped(SkipReason),
@@ -18,7 +17,6 @@ pub enum TranscodeOutcome {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct CompletedTranscode {
     pub final_path: AbsoluteFilePath,
     pub new_size: SizeBytes,

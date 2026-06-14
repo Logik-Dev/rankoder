@@ -13,16 +13,13 @@ pub enum DetectError {
 #[derive(Debug, Error)]
 pub enum TranscodeError {
     #[error("ffmpeg failed with exit code {exit_code:?}: {stderr}")]
-    #[allow(dead_code)]
     FfmpegFailed {
         exit_code: Option<i32>,
         stderr: String,
     },
     #[error("video properties missing for media file")]
-    #[allow(dead_code)]
     MissingVideoProperties,
     #[error("missing transcode spec or crf")]
-    #[allow(dead_code)]
     MissingSpec,
     #[error("validation failed: {0}")]
     Validation(#[from] ValidationError),
@@ -41,7 +38,6 @@ pub enum TranscodeError {
 impl TranscodeError {
     /// Terminal errors are recorded as `Failed`. Transient errors are propagated
     /// so that the file remains in `Transcoding` and can be retried.
-    #[allow(dead_code)]
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,

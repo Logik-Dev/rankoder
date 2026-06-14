@@ -8,12 +8,17 @@ use tracing::{error, info, instrument, warn};
 
 use crate::{
     models::{
-        common::AbsoluteFilePath, event::MediaEvent, media_file::MediaFileId,
-        transcode::SkipReason, workflow::WorkflowStateTag,
+        common::AbsoluteFilePath,
+        event::MediaEvent,
+        media_file::{MediaFile, MediaFileId},
+        transcode::SkipReason,
+        workflow::WorkflowStateTag,
     },
     store::MediaStore,
     transcode::{
         encoder::Encoder,
+        error::TranscodeError,
+        outcome::{CompletedTranscode, TranscodeOutcome},
         recovery::{self, RecoveryAction},
         swap::{RealFileSystem, Swapper},
         validation,
@@ -115,49 +120,33 @@ impl TranscodeOrchestrator {
         Ok(())
     }
 
-    #[instrument(skip(store, tmp_dir, retention_dir), fields(id = ?media_file_id), err)]
-    async fn process_file(
-        store: Arc<MediaStore>,
+    #[instrument(skip(encoder, tmp_dir, retention_dir, media_file), fields(id = ?media_file.id), err)]
+    async fn transcode_file(
         encoder: Encoder,
         tmp_dir: &Path,
         retention_dir: &Path,
         min_size_reduction: f64,
-        media_file_id: MediaFileId,
-    ) -> Result<()> {
-        let media_file = store.find_media_file_by_id(&media_file_id).await?;
+        media_file: &MediaFile,
+    ) -> Result<TranscodeOutcome, TranscodeError> {
+        let media_file_id = media_file.id;
 
-        let video_properties = media_file.video_properties.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("no video properties for file {}", media_file_id.as_uuid())
-        })?;
+        let video_properties = media_file
+            .video_properties
+            .as_ref()
+            .ok_or(TranscodeError::MissingVideoProperties)?;
 
-        let original_size = video_properties.size_bytes;
-        let original_duration = video_properties.duration.as_ref().map(|d| d.as_secs_f64());
-
-        let crf = match media_file
+        let crf = media_file
             .transcode_spec
             .as_ref()
             .and_then(|s| s.get("crf"))
             .and_then(|c| c.as_u64())
             .map(|c| c as u8)
-        {
-            Some(c) => c,
-            None => {
-                store
-                    .transition(
-                        &media_file_id,
-                        WorkflowStateTag::Transcoding,
-                        WorkflowStateTag::Failed,
-                        &MediaEvent::TranscodeFailed {
-                            error: "missing transcode_spec or crf".into(),
-                        },
-                    )
-                    .await?;
-                return Ok(());
-            }
-        };
+            .ok_or(TranscodeError::MissingSpec)?;
 
-        let temp_path = tmp_dir.join(format!("{}.mkv", media_file_id.as_uuid()));
+        let original_size = video_properties.size_bytes;
+        let original_duration = video_properties.duration.as_ref().map(|d| d.as_secs_f64());
         let original_path = media_file.path.as_ref().to_path_buf();
+        let temp_path = tmp_dir.join(format!("{}.mkv", media_file_id.as_uuid()));
 
         // Crash recovery: detect if a previous swap completed but the DB
         // commit was lost, or if the swap was only partially done.
@@ -173,25 +162,6 @@ impl TranscodeOrchestrator {
             RecoveryAction::ProceedNormally => {
                 // Continue to normal ffmpeg encode below
             }
-            RecoveryAction::CommitComplete {
-                final_path,
-                retention_path,
-                output_vp,
-            } => {
-                let final_abs = AbsoluteFilePath::new(&final_path)?;
-                store
-                    .complete_transcode(
-                        &media_file_id,
-                        &final_abs,
-                        output_vp.size_bytes,
-                        output_vp.bitrate.as_ref(),
-                        original_size,
-                        retention_path.to_str().unwrap_or(""),
-                    )
-                    .await?;
-                info!(?media_file_id, "recovered: previous swap commited to DB");
-                return Ok(());
-            }
             RecoveryAction::RestoreAndRetry => {
                 info!(
                     ?media_file_id,
@@ -199,22 +169,26 @@ impl TranscodeOrchestrator {
                 );
                 // Fall through to normal ffmpeg encode
             }
+            RecoveryAction::CommitComplete {
+                final_path,
+                retention_path,
+                output_vp,
+            } => {
+                let final_abs = AbsoluteFilePath::new(&final_path)?;
+                return Ok(TranscodeOutcome::Completed(CompletedTranscode {
+                    final_path: final_abs,
+                    new_size: output_vp.size_bytes,
+                    bitrate: output_vp.bitrate,
+                    retention_path,
+                }));
+            }
             RecoveryAction::MarkFailed { reason } => {
-                store
-                    .transition(
-                        &media_file_id,
-                        WorkflowStateTag::Transcoding,
-                        WorkflowStateTag::Failed,
-                        &MediaEvent::TranscodeFailed { error: reason },
-                    )
-                    .await?;
-                return Ok(());
+                return Err(TranscodeError::Recovery(reason));
             }
         }
 
         info!(?original_size, %crf, temp = %temp_path.display(), "starting ffmpeg encode");
 
-        // Encode step
         let color = media_file
             .video_properties
             .as_ref()
@@ -229,7 +203,11 @@ impl TranscodeOrchestrator {
             .args(&args)
             .arg(&temp_path)
             .output()
-            .await?;
+            .await
+            .map_err(|e| TranscodeError::FfmpegFailed {
+                exit_code: None,
+                stderr: format!("failed to spawn ffmpeg: {e}"),
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -240,22 +218,14 @@ impl TranscodeOrchestrator {
                 "ffmpeg encode failed"
             );
             let _ = tokio::fs::remove_file(&temp_path).await;
-            store
-                .transition(
-                    &media_file_id,
-                    WorkflowStateTag::Transcoding,
-                    WorkflowStateTag::Failed,
-                    &MediaEvent::TranscodeFailed {
-                        error: format!("ffmpeg exit code {:?}: {}", output.status.code(), stderr),
-                    },
-                )
-                .await?;
-            return Ok(());
+            return Err(TranscodeError::FfmpegFailed {
+                exit_code: output.status.code(),
+                stderr,
+            });
         }
 
         info!(?media_file_id, "ffmpeg encode finished");
 
-        // Validation step
         let output_vp = match validation::validate_output(&temp_path, original_duration, 1.0).await
         {
             Ok(vp) => {
@@ -265,23 +235,12 @@ impl TranscodeOrchestrator {
             Err(e) => {
                 warn!(%e, ?media_file_id, "validation failed");
                 let _ = tokio::fs::remove_file(&temp_path).await;
-                store
-                    .transition(
-                        &media_file_id,
-                        WorkflowStateTag::Transcoding,
-                        WorkflowStateTag::Failed,
-                        &MediaEvent::TranscodeFailed {
-                            error: e.to_string(),
-                        },
-                    )
-                    .await?;
-                return Ok(());
+                return Err(TranscodeError::Validation(e));
             }
         };
 
         let new_size = output_vp.size_bytes;
 
-        // Size reduction threshold check
         let min_acceptable = (original_size.as_u64() as f64 * (1.0 - min_size_reduction)) as u64;
         if new_size.as_u64() > min_acceptable {
             info!(
@@ -292,64 +251,112 @@ impl TranscodeOrchestrator {
                 "insufficient size reduction, skipping"
             );
             let _ = tokio::fs::remove_file(&temp_path).await;
-            store
-                .transition(
-                    &media_file_id,
-                    WorkflowStateTag::Transcoding,
-                    WorkflowStateTag::Skipped,
-                    &MediaEvent::Skipped {
-                        reason: SkipReason::InsufficientSizeReduction,
-                        bpp: None,
-                        compression_potential: None,
-                    },
-                )
-                .await?;
-            return Ok(());
+            return Ok(TranscodeOutcome::Skipped(
+                SkipReason::InsufficientSizeReduction,
+            ));
         }
 
-        // Atomic swap
         let swapper = Swapper::new(RealFileSystem);
-        let result = match swapper
+        let result = swapper
             .atomic_swap(&original_path, &temp_path, retention_dir, media_file_id)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                store
-                    .transition(
-                        &media_file_id,
-                        WorkflowStateTag::Transcoding,
-                        WorkflowStateTag::Failed,
-                        &MediaEvent::TranscodeFailed {
-                            error: format!("swap failed: {e}"),
-                        },
-                    )
-                    .await?;
-                return Ok(());
-            }
-        };
+            .await?;
 
         let final_abs = AbsoluteFilePath::new(&result.final_path)?;
 
-        if let Err(e) = store
-            .complete_transcode(
-                &media_file_id,
-                &final_abs,
-                new_size,
-                output_vp.bitrate.as_ref(),
-                original_size,
-                result.retention_path.to_str().unwrap_or(""),
-            )
-            .await
+        Ok(TranscodeOutcome::Completed(CompletedTranscode {
+            final_path: final_abs,
+            new_size,
+            bitrate: output_vp.bitrate,
+            retention_path: result.retention_path,
+        }))
+    }
+
+    #[instrument(skip(store, tmp_dir, retention_dir), fields(id = ?media_file_id), err)]
+    async fn process_file(
+        store: Arc<MediaStore>,
+        encoder: Encoder,
+        tmp_dir: &Path,
+        retention_dir: &Path,
+        min_size_reduction: f64,
+        media_file_id: MediaFileId,
+    ) -> Result<()> {
+        let media_file = store.find_media_file_by_id(&media_file_id).await?;
+
+        match Self::transcode_file(
+            encoder,
+            tmp_dir,
+            retention_dir,
+            min_size_reduction,
+            &media_file,
+        )
+        .await
         {
-            error!(
-                %e,
-                "complete_transcode failed after swap; file remains in Transcoding for recovery on next startup"
-            );
-            return Ok(());
+            Ok(TranscodeOutcome::Completed(c)) => {
+                // `Completed` is only produced when video_properties are present,
+                // so the `None` branch is defensive.
+                match media_file.video_properties.as_ref() {
+                    Some(vp) => {
+                        store
+                            .complete_transcode(
+                                &media_file_id,
+                                &c.final_path,
+                                c.new_size,
+                                c.bitrate.as_ref(),
+                                vp.size_bytes,
+                                c.retention_path.to_str().unwrap_or(""),
+                            )
+                            .await?;
+                        info!(?media_file_id, "transcode completed successfully");
+                    }
+                    None => {
+                        store
+                            .apply_event(
+                                &media_file_id,
+                                WorkflowStateTag::Transcoding,
+                                &MediaEvent::TranscodeFailed {
+                                    error: format!(
+                                        "no video properties for file {}",
+                                        media_file_id.as_uuid()
+                                    ),
+                                },
+                            )
+                            .await?;
+                    }
+                }
+            }
+            Ok(TranscodeOutcome::Skipped(reason)) => {
+                store
+                    .apply_event(
+                        &media_file_id,
+                        WorkflowStateTag::Transcoding,
+                        &MediaEvent::Skipped {
+                            reason,
+                            bpp: None,
+                            compression_potential: None,
+                        },
+                    )
+                    .await?;
+            }
+            Ok(TranscodeOutcome::AlreadyRecovered) => {
+                info!(?media_file_id, "transcode already recovered");
+            }
+            Err(e) if e.is_terminal() => {
+                error!(%e, ?media_file_id, "terminal transcode error");
+                store
+                    .apply_event(
+                        &media_file_id,
+                        WorkflowStateTag::Transcoding,
+                        &MediaEvent::TranscodeFailed {
+                            error: e.to_string(),
+                        },
+                    )
+                    .await?;
+            }
+            Err(e) => {
+                error!(%e, ?media_file_id, "transient transcode error, left in Transcoding for retry");
+            }
         }
 
-        info!(?media_file_id, "transcode completed successfully");
         Ok(())
     }
 }
