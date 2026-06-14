@@ -1,18 +1,14 @@
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, warn};
 
 use crate::{
-    models::{
-        event::MediaEvent,
-        media_file::{MediaFile, MediaFileId},
-        workflow::WorkflowStateTag,
-    },
+    models::{batch::BatchKey, event::MediaEvent, workflow::WorkflowStateTag},
     notification::{ApprovalNotifier, ApprovalRequest, ApprovalResponse},
-    store::{MediaStore, error::StoreError},
+    store::{BatchApprovalInfo, MediaStore},
 };
 
 pub struct ApprovalOrchestrator {
@@ -34,68 +30,6 @@ impl ApprovalOrchestrator {
         self.wake.notify_one();
     }
 
-    #[instrument(skip(self, media_file), fields(id = ?media_file.id), err)]
-    pub async fn send_request(&self, media_file: &MediaFile) -> Result<()> {
-        let request = self.build_request(media_file).await?;
-
-        match self
-            .store
-            .transition(
-                &media_file.id,
-                WorkflowStateTag::Analyzed,
-                WorkflowStateTag::PendingApproval,
-                &MediaEvent::PendingApproval,
-            )
-            .await
-        {
-            Ok(()) => {}
-            Err(StoreError::StaleState { expected }) => {
-                warn!(?expected, "approval already pending for this file");
-            }
-            Err(e) => return Err(e.into()),
-        }
-        self.publish_request(&request).await?;
-
-        Ok(())
-    }
-
-    pub async fn resend_request(&self, media_file: &MediaFile) -> Result<()> {
-        let request = self.build_request(media_file).await?;
-        self.publish_request(&request).await
-    }
-
-    async fn build_request(&self, media_file: &MediaFile) -> Result<ApprovalRequest> {
-        let info = self.store.fetch_approval_info(&media_file.id).await?;
-
-        let Some(vp) = &media_file.video_properties else {
-            bail!("missing video properties for {:?}", media_file.id);
-        };
-
-        let Some(compression_potential) = info.compression_potential else {
-            bail!(
-                "missing compression_potential in transcode_spec for analyzed file {:?}",
-                media_file.id
-            );
-        };
-
-        let size_gb = vp.size_bytes.as_gb();
-        let clamped_potential = compression_potential.clamp(0.0, 1.0);
-        let estimated_size_gb = size_gb * (1.0 - clamped_potential);
-        let space_saved_gb = size_gb - estimated_size_gb;
-
-        Ok(ApprovalRequest {
-            media_file_id: media_file.id.as_uuid(),
-            title: info
-                .title
-                .unwrap_or_else(|| media_file.path.as_ref().to_string_lossy().into_owned()),
-            size_gb: round_1dp(size_gb),
-            estimated_size_gb: round_1dp(estimated_size_gb),
-            space_saved_gb: round_1dp(space_saved_gb),
-            compression_potential: round_1dp(clamped_potential),
-            tmdb_rating: info.tmdb_rating,
-        })
-    }
-
     async fn publish_request(&self, request: &ApprovalRequest) -> Result<()> {
         self.notifier
             .request_approval(request)
@@ -103,11 +37,22 @@ impl ApprovalOrchestrator {
             .map_err(Into::into)
     }
 
+    fn build_request(key: &BatchKey, info: &BatchApprovalInfo) -> ApprovalRequest {
+        ApprovalRequest {
+            batch_id: key.encode(),
+            title: info.title.clone(),
+            file_count: info.file_count as u32,
+            total_size_gb: info.total_size_gb,
+            total_space_saved_gb: info.total_space_saved_gb,
+            tmdb_rating: info.tmdb_rating,
+        }
+    }
+
     async fn top_up(&self, capacity: usize) {
-        let pending = match self.store.count_pending_approvals().await {
+        let pending = match self.store.count_pending_batches().await {
             Ok(n) => n,
             Err(e) => {
-                error!("failed to count pending approvals: {e}");
+                error!("failed to count pending batches: {e}");
                 return;
             }
         };
@@ -117,62 +62,74 @@ impl ApprovalOrchestrator {
             return;
         }
 
-        let ids = match self.store.fetch_oldest_analyzed(slots).await {
+        let keys = match self.store.fetch_ready_batch_keys(slots).await {
             Ok(v) => v,
             Err(e) => {
-                error!("failed to fetch oldest analyzed files: {e}");
+                error!("failed to fetch ready batch keys: {e}");
                 return;
             }
         };
 
-        for id in ids {
-            let Ok(media_file) = self.store.find_media_file_by_id(&id).await else {
-                continue;
+        for key in keys {
+            let ids = match self
+                .store
+                .transition_batch(
+                    &key,
+                    WorkflowStateTag::Analyzed,
+                    WorkflowStateTag::PendingApproval,
+                    &MediaEvent::PendingApproval,
+                )
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    error!(?key, %e, "failed to transition batch to pending approval");
+                    continue;
+                }
             };
-            if let Err(e) = self.send_request(&media_file).await {
-                error!(?id, %e, "feeder failed to send approval request");
+
+            if ids.is_empty() {
+                continue;
+            }
+
+            let info = match self.store.fetch_batch_request_info(&key).await {
+                Ok(i) => i,
+                Err(e) => {
+                    error!(?key, %e, "failed to fetch batch request info");
+                    continue;
+                }
+            };
+
+            let request = Self::build_request(&key, &info);
+            if let Err(e) = self.publish_request(&request).await {
+                error!(?key, %e, "failed to publish batch approval request");
             }
         }
     }
 
-    #[instrument(skip(self), fields(media_file_id = %response.media_file_id, approved = response.approved), err)]
+    #[instrument(skip(self), fields(batch_id = %response.batch_id, approved = response.approved), err)]
     async fn handle_response(&self, response: ApprovalResponse) -> Result<()> {
-        let file_id = MediaFileId::from(response.media_file_id);
-        if response.approved {
-            match self
-                .store
-                .transition(
-                    &file_id,
-                    WorkflowStateTag::PendingApproval,
-                    WorkflowStateTag::Transcoding,
-                    &MediaEvent::ApprovalGranted,
-                )
-                .await
-            {
-                Ok(()) => {}
-                Err(StoreError::StaleState { expected }) => {
-                    warn!(?expected, "approval grant already processed");
-                }
-                Err(e) => return Err(e.into()),
-            }
+        let key = BatchKey::decode(&response.batch_id)
+            .map_err(|e| anyhow::anyhow!("invalid batch_id in response: {e}"))?;
+
+        let (to_state, event) = if response.approved {
+            (WorkflowStateTag::Transcoding, MediaEvent::ApprovalGranted)
         } else {
-            match self
-                .store
-                .transition(
-                    &file_id,
-                    WorkflowStateTag::PendingApproval,
-                    WorkflowStateTag::Skipped,
-                    &MediaEvent::ApprovalRejected,
-                )
-                .await
-            {
-                Ok(()) => {}
-                Err(StoreError::StaleState { expected }) => {
-                    warn!(?expected, "approval rejection already processed");
-                }
-                Err(e) => return Err(e.into()),
-            }
+            (WorkflowStateTag::Skipped, MediaEvent::ApprovalRejected)
+        };
+
+        let ids = self
+            .store
+            .transition_batch(&key, WorkflowStateTag::PendingApproval, to_state, &event)
+            .await?;
+
+        if ids.is_empty() {
+            warn!(
+                ?key,
+                "batch transition returned no ids (already processed?)"
+            );
         }
+
         self.wake.notify_one();
         Ok(())
     }
@@ -222,27 +179,30 @@ impl ApprovalOrchestrator {
                 biased;
                 _ = token.cancelled() => return Ok(()),
                 _ = interval.tick() => {
-                    let ids = match self
+                    let keys = match self
                         .store
-                        .fetch_stale_pending_approvals(threshold_minutes as i32)
-                        .await {
-                            Ok(v) => v,
+                        .fetch_stale_pending_batches(threshold_minutes as i32)
+                        .await
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            error!("failed to fetch stale pending batches: {e}");
+                            continue;
+                        }
+                    };
+
+                    for key in keys {
+                        let info = match self.store.fetch_batch_request_info(&key).await {
+                            Ok(i) => i,
                             Err(e) => {
-                                error!("failed to fetch stale pending approvals: {e}");
+                                error!(?key, %e, "failed to fetch batch request info for stale check");
                                 continue;
                             }
                         };
 
-                    for id in ids {
-                        let media_file = match self.store.find_media_file_by_id(&id).await {
-                            Ok(m) => m,
-                            Err(e) => {
-                                error!(?id, "failed to find media file : {e}");
-                                continue;
-                            }
-                        };
-                        if let Err(e) = self.resend_request(&media_file).await {
-                            error!(?id, %e, "failed to resend approval request");
+                        let request = Self::build_request(&key, &info);
+                        if let Err(e) = self.publish_request(&request).await {
+                            error!(?key, %e, "failed to re-publish stale batch request");
                         }
                     }
                 }
@@ -265,8 +225,4 @@ impl ApprovalOrchestrator {
             }
         }
     }
-}
-
-fn round_1dp(value: f64) -> f64 {
-    (value * 10.0).round() / 10.0
 }

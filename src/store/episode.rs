@@ -1,5 +1,5 @@
 use sqlx::{Postgres, Transaction};
-use tracing::{info, instrument};
+use tracing::{debug, instrument};
 
 use crate::{
     models::{
@@ -31,7 +31,7 @@ pub(crate) async fn find_or_create_episode(
     .await?;
 
     if let Some(r) = row {
-        info!(
+        debug!(
             episode_id = %r.id.as_uuid(),
             series_id = %draft.series_id.as_uuid(),
             season = season,

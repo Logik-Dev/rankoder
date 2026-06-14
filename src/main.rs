@@ -39,8 +39,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cfg = AppConfig::from_env()?;
 
+    // Cover the workflow's worker pool (available_parallelism) plus the
+    // background tasks (feeder, stale checker, response handler).
+    // PgListener has its own dedicated connection, not counted here.
+    let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let max_connections = (workers + 5) as u32;
+
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(max_connections)
+        // Slow-acquire spikes are expected during catch-up bursts; keep them at
+        // trace level instead of warn so they don't flood the logs.
+        //.acquire_slow_level(log::LevelFilter::Trace)
         .connect(&cfg.database_url)
         .await?;
 
@@ -69,12 +78,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let workflow_orchestrator = WorkflowOrchestrator::new(
         rx,
         store.clone(),
-        Arc::new(FFmpeg),
+        Arc::new(FFmpeg::new(3)),
         analysis_orchestrator,
         approval_orchestrator.clone(),
     );
 
-    let postgres_listener = PostgresListener::new(pool.clone(), store.clone(), tx);
+    let postgres_listener = PostgresListener::new(cfg.database_url.clone(), store.clone(), tx);
 
     let provider = JellyfinProvider::new(&cfg.jellyfin_url, &cfg.jellyfin_api_key)?;
 

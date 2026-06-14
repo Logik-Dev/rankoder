@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod common;
 pub mod drafts;
 pub mod episode;

@@ -26,7 +26,7 @@ impl TakeTranscodeDecisionService {
         }
     }
 
-    #[instrument(skip(self, file), name = "decision", fields(id = ?file.id), ret)]
+    #[instrument(skip(self, file), name = "decision", fields(id = ?file.id))]
     pub fn execute(&self, file: &MediaFile, tmdb_rating: Option<f32>) -> TranscodeDecision {
         debug!("taking transcode decision");
 

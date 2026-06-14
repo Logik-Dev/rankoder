@@ -2,12 +2,15 @@ use std::collections::HashMap;
 
 use sqlx::PgPool;
 use tracing::instrument;
+use uuid::Uuid;
 
 use crate::{
     models::{
+        batch::BatchKey,
         drafts::{EpisodeDraft, MovieDraft, SeriesDraft},
         event::MediaEvent,
         media_file::{MediaFile, MediaFileId},
+        movie::MovieId,
         series::SeriesId,
         transcode::TranscodeDecision,
         video::VideoProperties,
@@ -305,39 +308,17 @@ impl MediaStore {
         }
     }
 
-    pub async fn fetch_stale_pending_approvals(
-        &self,
-        threshold_minutes: i32,
-    ) -> Result<Vec<MediaFileId>, StoreError> {
-        let rows = sqlx::query!(
-            r#"SELECT id FROM media_files
-               WHERE workflow_state = 'pending_approval'
-                 AND updated_at < NOW() - make_interval(mins => $1)"#,
-            threshold_minutes,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
-    }
-
-    pub async fn fetch_oldest_analyzed(&self, limit: i64) -> Result<Vec<MediaFileId>, StoreError> {
-        let rows = sqlx::query!(
-            r#"SELECT id FROM media_files
-               WHERE workflow_state = 'analyzed'
-               ORDER BY updated_at ASC
-               LIMIT $1"#,
-            limit,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
-    }
-
-    pub async fn count_pending_approvals(&self) -> Result<i64, StoreError> {
+    pub async fn count_pending_batches(&self) -> Result<i64, StoreError> {
         let row = sqlx::query!(
-            r#"SELECT COUNT(*) as count FROM media_files WHERE workflow_state = 'pending_approval'"#
+            r#"
+            SELECT (
+                (SELECT COUNT(DISTINCT (e.series_id, e.season_number))
+                 FROM media_files mf JOIN episodes e ON mf.episode_id = e.id
+                 WHERE mf.workflow_state = 'pending_approval')
+              + (SELECT COUNT(*) FROM media_files
+                 WHERE movie_id IS NOT NULL AND workflow_state = 'pending_approval')
+            ) AS count
+            "#
         )
         .fetch_one(&self.pool)
         .await?;
@@ -345,42 +326,237 @@ impl MediaStore {
         Ok(row.count.unwrap_or(0))
     }
 
-    pub async fn fetch_approval_info(
-        &self,
-        media_file_id: &MediaFileId,
-    ) -> Result<ApprovalInfo, StoreError> {
-        let row = sqlx::query!(
+    pub async fn fetch_ready_batch_keys(&self, limit: i64) -> Result<Vec<BatchKey>, StoreError> {
+        let rows = sqlx::query!(
             r#"
-                SELECT
-                    COALESCE(e.title, m.title) AS title,
-                    COALESCE(e.rating, m.rating) AS tmdb_rating,
-                    (mf.transcode_spec->>'crf')::integer AS crf,
-                    (mf.transcode_spec->>'bpp')::double precision AS bpp,
-                    (mf.transcode_spec->>'compression_potential')::double precision AS compression_potential
-                FROM media_files mf
-                LEFT JOIN episodes e ON mf.episode_id = e.id
-                LEFT JOIN movies   m ON mf.movie_id   = m.id
-                WHERE mf.id = $1
+            SELECT 'season' AS kind, e.series_id, e.season_number AS season, NULL::uuid AS movie_id,
+                   MIN(mf.updated_at) AS oldest
+            FROM media_files mf JOIN episodes e ON mf.episode_id = e.id
+            GROUP BY e.series_id, e.season_number
+            HAVING bool_or(mf.workflow_state = 'analyzed')
+               AND NOT bool_or(mf.workflow_state IN ('discovered','probed','pending_approval'))
+            UNION ALL
+            SELECT 'movie', NULL::uuid, NULL::smallint, mf.movie_id, mf.updated_at
+            FROM media_files mf
+            WHERE mf.movie_id IS NOT NULL AND mf.workflow_state = 'analyzed'
+            ORDER BY oldest ASC
+            LIMIT $1
             "#,
-            media_file_id.as_uuid(),
+            limit,
         )
-        .fetch_one(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
 
-        Ok(ApprovalInfo {
-            title: row.title,
-            tmdb_rating: row.tmdb_rating,
-            crf: row.crf,
-            bpp: row.bpp,
-            compression_potential: row.compression_potential,
-        })
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                if r.kind.as_deref() == Some("season") {
+                    BatchKey::Season {
+                        series_id: SeriesId::from(r.series_id.unwrap()),
+                        season: r.season.unwrap(),
+                    }
+                } else {
+                    BatchKey::Movie {
+                        movie_id: MovieId::from(r.movie_id.unwrap()),
+                    }
+                }
+            })
+            .collect())
+    }
+
+    pub async fn fetch_stale_pending_batches(
+        &self,
+        threshold_minutes: i32,
+    ) -> Result<Vec<BatchKey>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT 'season' AS kind, e.series_id, e.season_number AS season, NULL::uuid AS movie_id,
+                   MIN(mf.updated_at) AS oldest
+            FROM media_files mf JOIN episodes e ON mf.episode_id = e.id
+            WHERE mf.workflow_state = 'pending_approval'
+            GROUP BY e.series_id, e.season_number
+            HAVING MIN(mf.updated_at) < NOW() - make_interval(mins => $1)
+            UNION ALL
+            SELECT 'movie', NULL::uuid, NULL::smallint, mf.movie_id, mf.updated_at
+            FROM media_files mf
+            WHERE mf.movie_id IS NOT NULL
+              AND mf.workflow_state = 'pending_approval'
+              AND mf.updated_at < NOW() - make_interval(mins => $1)
+            ORDER BY oldest ASC
+            "#,
+            threshold_minutes,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                if r.kind.as_deref() == Some("season") {
+                    BatchKey::Season {
+                        series_id: SeriesId::from(r.series_id.unwrap()),
+                        season: r.season.unwrap(),
+                    }
+                } else {
+                    BatchKey::Movie {
+                        movie_id: MovieId::from(r.movie_id.unwrap()),
+                    }
+                }
+            })
+            .collect())
+    }
+
+    pub async fn transition_batch(
+        &self,
+        key: &BatchKey,
+        from: WorkflowStateTag,
+        to: WorkflowStateTag,
+        event: &MediaEvent,
+    ) -> Result<Vec<MediaFileId>, StoreError> {
+        let mut tx = self.pool.begin().await?;
+
+        let ids: Vec<Uuid> = match key {
+            BatchKey::Season { series_id, season } => sqlx::query!(
+                r#"
+                    UPDATE media_files mf SET workflow_state = $1
+                    FROM episodes e
+                    WHERE mf.episode_id = e.id
+                      AND e.series_id = $2
+                      AND e.season_number = $3
+                      AND mf.workflow_state = $4
+                    RETURNING mf.id
+                    "#,
+                to as WorkflowStateTag,
+                series_id.as_uuid(),
+                *season,
+                from as WorkflowStateTag,
+            )
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .map(|r| r.id)
+            .collect(),
+            BatchKey::Movie { movie_id } => sqlx::query!(
+                r#"
+                    UPDATE media_files SET workflow_state = $1
+                    WHERE movie_id = $2
+                      AND workflow_state = $3
+                    RETURNING id
+                    "#,
+                to as WorkflowStateTag,
+                movie_id.as_uuid(),
+                from as WorkflowStateTag,
+            )
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .map(|r| r.id)
+            .collect(),
+        };
+
+        if ids.is_empty() {
+            tx.rollback().await?;
+            return Ok(Vec::new());
+        }
+
+        sqlx::query!(
+            r#"
+            INSERT INTO events(media_file_id, event)
+            SELECT unnest($1::uuid[]), $2
+            "#,
+            &ids[..],
+            serde_json::to_value(event)?,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(ids.into_iter().map(MediaFileId::from).collect())
+    }
+
+    pub async fn fetch_batch_request_info(
+        &self,
+        key: &BatchKey,
+    ) -> Result<BatchApprovalInfo, StoreError> {
+        match key {
+            BatchKey::Season { series_id, season } => {
+                let row = sqlx::query!(
+                    r#"
+                    SELECT s.title, s.rating,
+                           COUNT(*)::bigint AS file_count,
+                           SUM(mf.size_bytes)::bigint AS total_size_bytes,
+                           SUM(mf.size_bytes * LEAST(GREATEST(COALESCE((mf.transcode_spec->>'compression_potential')::float8, 0), 0), 1))::bigint AS saved_bytes
+                    FROM media_files mf
+                    JOIN episodes e ON mf.episode_id = e.id
+                    JOIN series s ON e.series_id = s.id
+                    WHERE e.series_id = $1
+                      AND e.season_number = $2
+                      AND mf.workflow_state = 'pending_approval'
+                    GROUP BY s.title, s.rating
+                    "#,
+                    series_id.as_uuid(),
+                    *season,
+                )
+                .fetch_one(&self.pool)
+                .await?;
+
+                let total_size_gb = bytes_to_gb(row.total_size_bytes.unwrap_or(0));
+                let saved_gb = bytes_to_gb(row.saved_bytes.unwrap_or(0));
+
+                Ok(BatchApprovalInfo {
+                    title: format!("{} — Saison {}", row.title, season),
+                    tmdb_rating: row.rating,
+                    file_count: row.file_count.unwrap_or(0),
+                    total_size_gb: round_1dp(total_size_gb),
+                    total_space_saved_gb: round_1dp(saved_gb),
+                })
+            }
+            BatchKey::Movie { movie_id } => {
+                let row = sqlx::query!(
+                    r#"
+                    SELECT m.title, m.rating,
+                           COUNT(*)::bigint AS file_count,
+                           SUM(mf.size_bytes)::bigint AS total_size_bytes,
+                           SUM(mf.size_bytes * LEAST(GREATEST(COALESCE((mf.transcode_spec->>'compression_potential')::float8, 0), 0), 1))::bigint AS saved_bytes
+                    FROM media_files mf
+                    JOIN movies m ON mf.movie_id = m.id
+                    WHERE mf.movie_id = $1
+                      AND mf.workflow_state = 'pending_approval'
+                    GROUP BY m.title, m.rating
+                    "#,
+                    movie_id.as_uuid(),
+                )
+                .fetch_one(&self.pool)
+                .await?;
+
+                let total_size_gb = bytes_to_gb(row.total_size_bytes.unwrap_or(0));
+                let saved_gb = bytes_to_gb(row.saved_bytes.unwrap_or(0));
+
+                Ok(BatchApprovalInfo {
+                    title: row.title,
+                    tmdb_rating: row.rating,
+                    file_count: row.file_count.unwrap_or(0),
+                    total_size_gb: round_1dp(total_size_gb),
+                    total_space_saved_gb: round_1dp(saved_gb),
+                })
+            }
+        }
     }
 }
 
-pub struct ApprovalInfo {
-    pub title: Option<String>,
+pub struct BatchApprovalInfo {
+    pub title: String,
     pub tmdb_rating: Option<f32>,
-    pub crf: Option<i32>,
-    pub bpp: Option<f64>,
-    pub compression_potential: Option<f64>,
+    pub file_count: i64,
+    pub total_size_gb: f64,
+    pub total_space_saved_gb: f64,
+}
+
+fn bytes_to_gb(bytes: i64) -> f64 {
+    bytes as f64 / 1_073_741_824.0
+}
+
+fn round_1dp(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
 }

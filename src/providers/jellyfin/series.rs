@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::{instrument, warn};
+use tracing::{debug, instrument};
 
 use crate::{
     models::{
@@ -49,7 +49,7 @@ impl SeriesProvider for JellyfinProvider {
         })
     }
 
-    #[instrument(skip(self), err, fields(name = %item.name))]
+    #[instrument(skip(self), err, fields(name = %item.name), level = "debug")]
     fn map_to_episode_draft(
         &self,
         item: JellyfinItem,
@@ -63,7 +63,7 @@ impl SeriesProvider for JellyfinProvider {
             .parent_index_number
             .and_then(|n| {
                 SeasonNumber::new(n)
-                    .inspect_err(|error| warn!(%error, "invalid season number"))
+                    .inspect_err(|error| debug!(%error, "invalid season number"))
                     .ok()
             })
             .ok_or(ProviderError::MissingSeasonNumber)?;
@@ -72,7 +72,7 @@ impl SeriesProvider for JellyfinProvider {
             .index_number
             .and_then(|n| {
                 EpisodeNumber::new(n)
-                    .inspect_err(|error| warn!(%error, "invalid episode number"))
+                    .inspect_err(|error| debug!(%error, "invalid episode number"))
                     .ok()
             })
             .ok_or(ProviderError::MissingEpisodeNumber)?;

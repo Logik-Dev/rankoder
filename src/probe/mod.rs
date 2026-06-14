@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use tokio::process::Command;
 
@@ -10,7 +12,17 @@ mod error;
 mod mapping;
 mod output;
 
-pub struct FFmpeg;
+pub struct FFmpeg {
+    semaphore: Arc<tokio::sync::Semaphore>,
+}
+
+impl FFmpeg {
+    pub fn new(max_concurrent: usize) -> Self {
+        Self {
+            semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent)),
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProbeError {
@@ -26,6 +38,12 @@ pub trait Prober: Send + Sync {
 #[async_trait]
 impl Prober for FFmpeg {
     async fn probe(&self, file_path: &AbsoluteFilePath) -> Result<VideoProperties, ProbeError> {
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .expect("ffprobe semaphore closed");
+
         let output = Command::new("ffprobe")
             .args([
                 "-v",

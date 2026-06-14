@@ -1,5 +1,5 @@
 use sqlx::{Postgres, Transaction};
-use tracing::{info, instrument};
+use tracing::{debug, instrument};
 
 use crate::{
     models::{
@@ -23,7 +23,7 @@ pub(crate) async fn find_or_create_series(
         .fetch_optional(&mut **tx)
         .await?;
         if let Some(r) = row {
-            info!(
+            debug!(
                 series_id = %r.id.as_uuid(),
                 ?tmdb_id,
                 jellyfin_id = %draft.jellyfin_id,

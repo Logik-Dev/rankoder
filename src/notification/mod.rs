@@ -4,24 +4,22 @@ pub mod mqtt;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 pub use error::NotifierError;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApprovalRequest {
-    pub media_file_id: Uuid,
+    pub batch_id: String,
     pub title: String,
-    pub size_gb: f64,
-    pub estimated_size_gb: f64,
-    pub space_saved_gb: f64,
-    pub compression_potential: f64,
+    pub file_count: u32,
+    pub total_size_gb: f64,
+    pub total_space_saved_gb: f64,
     pub tmdb_rating: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApprovalResponse {
-    pub media_file_id: Uuid,
+    pub batch_id: String,
     pub approved: bool,
 }
 

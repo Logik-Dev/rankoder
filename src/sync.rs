@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument};
 
 use crate::{
     models::{
@@ -81,15 +81,15 @@ where
         let mut drafts = Vec::new();
         for item in raw {
             let Some(jellyfin_series_id) = item.parent_id() else {
-                warn!("skipping episode without series_id");
+                debug!("skipping episode without series_id");
                 continue;
             };
             let Some(series_id) = series_map.get(jellyfin_series_id) else {
-                warn!(%jellyfin_series_id, "skipping episode referencing unknown series");
+                debug!(%jellyfin_series_id, "skipping episode referencing unknown series");
                 continue;
             };
             let Ok(draft) = self.series_provider.map_to_episode_draft(item, series_id) else {
-                warn!("skipping invalid episode");
+                debug!("skipping invalid episode");
                 continue;
             };
             drafts.push(draft);

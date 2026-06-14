@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use serde::Deserialize;
-use sqlx::postgres::{PgListener, PgPool};
+use sqlx::postgres::PgListener;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -19,14 +19,22 @@ pub struct EventNotification {
 }
 
 pub struct PostgresListener {
-    pool: PgPool,
+    database_url: String,
     store: Arc<MediaStore>,
     tx: mpsc::Sender<MediaFileId>,
 }
 
 impl PostgresListener {
-    pub fn new(pool: PgPool, store: Arc<MediaStore>, tx: mpsc::Sender<MediaFileId>) -> Self {
-        Self { pool, store, tx }
+    pub fn new(
+        database_url: String,
+        store: Arc<MediaStore>,
+        tx: mpsc::Sender<MediaFileId>,
+    ) -> Self {
+        Self {
+            database_url,
+            store,
+            tx,
+        }
     }
 
     pub async fn listen(self, token: CancellationToken) -> anyhow::Result<()> {
@@ -56,7 +64,7 @@ impl PostgresListener {
     }
 
     async fn run_listener(&self, token: &CancellationToken) -> anyhow::Result<()> {
-        let mut listener = PgListener::connect_with(&self.pool).await?;
+        let mut listener = PgListener::connect(&self.database_url).await?;
         listener.listen("media_event").await?;
         info!("listening on media_event channel");
 

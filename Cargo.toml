@@ -16,6 +16,7 @@ anyhow = "1.0.102"
 futures = "0.3"
 thiserror = "2"
 uuid = {version = "1", features = ["v7", "fast-rng", "serde"]}
+log = "0.4"
 tracing = { version = "0.1", features = ["attributes"]}
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
