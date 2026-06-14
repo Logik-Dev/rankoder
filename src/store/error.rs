@@ -10,4 +10,6 @@ pub enum StoreError {
     Domain(#[from] DomainError),
     #[error("stale state: expected {expected:?}, but row was already advanced")]
     StaleState { expected: WorkflowStateTag },
+    #[error("invalid transition from {from:?}")]
+    InvalidTransition { from: WorkflowStateTag },
 }

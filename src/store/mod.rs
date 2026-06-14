@@ -262,6 +262,21 @@ impl MediaStore {
         Ok(())
     }
 
+    /// Apply a workflow event by deriving the next state from the state machine.
+    /// Fails with `StoreError::InvalidTransition` if the event is not valid from
+    /// the given `from` state.
+    pub async fn apply_event(
+        &self,
+        media_file_id: &MediaFileId,
+        from: WorkflowStateTag,
+        event: &MediaEvent,
+    ) -> Result<(), StoreError> {
+        let to = from
+            .next_on(event)
+            .ok_or(StoreError::InvalidTransition { from })?;
+        self.transition(media_file_id, from, to, event).await
+    }
+
     pub async fn save_analysis_result(
         &self,
         media_file_id: &MediaFileId,
