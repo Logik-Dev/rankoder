@@ -30,6 +30,7 @@ mod probe;
 pub mod providers;
 pub mod store;
 mod sync;
+mod transcode;
 mod workflow;
 
 #[tokio::main]
