@@ -18,13 +18,16 @@ impl Encoder {
     }
 
     pub fn build_args(&self, crf: u8, color: Option<&ColorMetadata>) -> Vec<String> {
+        // `0:V` (capital) selects the primary video stream, excluding attached
+        // cover art. Audio/subtitle maps use the `?` suffix so files without
+        // those streams don't fail with "Stream map matches no streams".
         let mut args: Vec<String> = vec![
             "-map".into(),
             "0:V".into(),
             "-map".into(),
-            "0:a".into(),
+            "0:a?".into(),
             "-map".into(),
-            "0:s".into(),
+            "0:s?".into(),
             "-dn".into(),
             "-c".into(),
             "copy".into(),
@@ -202,8 +205,8 @@ mod tests {
             let args = enc.build_args(20, None);
             assert!(args.contains(&"-map".into()));
             assert!(args.contains(&"0:V".into()));
-            assert!(args.contains(&"0:a".into()));
-            assert!(args.contains(&"0:s".into()));
+            assert!(args.contains(&"0:a?".into()));
+            assert!(args.contains(&"0:s?".into()));
             assert!(args.contains(&"-dn".into()));
             assert!(args.contains(&"-c".into()));
             assert!(args.contains(&"copy".into()));
