@@ -12,7 +12,11 @@ use crate::{
         transcode::SkipReason, workflow::WorkflowStateTag,
     },
     store::MediaStore,
-    transcode::{encoder::Encoder, error::TranscodeError, validation},
+    transcode::{
+        encoder::Encoder,
+        swap::{RealFileSystem, Swapper},
+        validation,
+    },
 };
 
 pub struct TranscodeOrchestrator {
@@ -231,46 +235,13 @@ impl TranscodeOrchestrator {
             return Ok(());
         }
 
-        // --- Swap (inline, will be extracted to swap.rs in step 4) ---
-        let filename = original_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file");
+        // Atomic swap
+        let swapper = Swapper::new(RealFileSystem);
+        let result = swapper
+            .atomic_swap(&original_path, &temp_path, retention_dir, media_file_id)
+            .await?;
 
-        let retention_path = retention_dir.join(format!("{media_file_id:?}_{filename}"));
-        let final_path = original_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join(format!(
-                "{}.mkv",
-                original_path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("output")
-            ));
-
-        info!(
-            ?media_file_id,
-            original = %original_path.display(),
-            temp = %temp_path.display(),
-            retention = %retention_path.display(),
-            final_path = %final_path.display(),
-            "swapping files"
-        );
-
-        std::fs::rename(&original_path, &retention_path).map_err(|e| {
-            error!(%e, "failed to rename original to retention");
-            TranscodeError::SwapFailed(e)
-        })?;
-
-        std::fs::rename(&temp_path, &final_path).map_err(|e| {
-            error!(%e, "failed to rename temp to final, attempting rollback");
-            // Best-effort rollback
-            let _ = std::fs::rename(&retention_path, &original_path);
-            TranscodeError::SwapFailed(e)
-        })?;
-
-        let final_abs = AbsoluteFilePath::new(&final_path)?;
+        let final_abs = AbsoluteFilePath::new(&result.final_path)?;
 
         store
             .complete_transcode(
@@ -279,7 +250,7 @@ impl TranscodeOrchestrator {
                 new_size,
                 output_vp.bitrate.as_ref(),
                 original_size,
-                retention_path.to_str().unwrap_or(""),
+                result.retention_path.to_str().unwrap_or(""),
             )
             .await
             .map_err(|e| {

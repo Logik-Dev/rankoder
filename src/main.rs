@@ -19,6 +19,7 @@ use crate::{
     store::MediaStore,
     sync::SyncOrchestrator,
     transcode::orchestrator::TranscodeOrchestrator,
+    transcode::reaper::RetentionReaper,
     workflow::WorkflowOrchestrator,
 };
 
@@ -137,6 +138,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .run_approval_feeder(token.child_token(), cfg.approval_max_pending),
     );
     join_set.spawn(approval_orchestrator.run_stale_checker(token.child_token(), 5));
+
+    let reaper = RetentionReaper::new(store.clone(), cfg.transcode_retention_days);
+    join_set.spawn(reaper.run(token.child_token()));
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
