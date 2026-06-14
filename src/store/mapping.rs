@@ -67,6 +67,7 @@ impl TryFrom<MediaFileRow> for MediaFile {
             movie_id,
             path,
             video_properties,
+            transcode_spec: value.transcode_spec,
             workflow_state: value.workflow_state,
         })
     }

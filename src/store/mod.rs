@@ -99,7 +99,8 @@ impl MediaStore {
             MediaFileRow,
             r#"
                 SELECT id, episode_id, movie_id, file_path, size_bytes, video_codec, height,
-                width, bitrate_kbps, framerate, duration_seconds, workflow_state as "workflow_state: WorkflowStateTag"
+                width, bitrate_kbps, framerate, duration_seconds, transcode_spec,
+                workflow_state as "workflow_state: WorkflowStateTag"
                 FROM media_files
                 WHERE id = $1
             "#,

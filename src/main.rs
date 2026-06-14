@@ -12,11 +12,13 @@ use crate::{
     approval::ApprovalOrchestrator,
     config::AppConfig,
     listener::PostgresListener,
+    models::workflow::WorkflowStateTag,
     notification::mqtt::MqttNotifier,
     probe::FFmpeg,
     providers::JellyfinProvider,
     store::MediaStore,
     sync::SyncOrchestrator,
+    transcode::orchestrator::TranscodeOrchestrator,
     workflow::WorkflowOrchestrator,
 };
 
@@ -60,6 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let (tx, rx) = mpsc::channel(100);
+    let (tx_t, rx_t) = mpsc::channel(100);
     let store = Arc::new(MediaStore::new(pool.clone()));
 
     let decision_service = TakeTranscodeDecisionService::new(
@@ -82,6 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(FFmpeg::new(3)),
         analysis_orchestrator,
         approval_orchestrator.clone(),
+        tx_t.clone(),
     );
 
     let postgres_listener = PostgresListener::new(cfg.database_url.clone(), store.clone(), tx);
@@ -93,11 +97,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("sync complete, waiting for Ctrl+C to stop");
 
+    // Detect encoder at startup
+    info!("detecting HEVC encoder...");
+    let encoder = transcode::detect::detect_encoder().await?;
+    info!(?encoder, "HEVC encoder selected");
+
+    let transcode_orchestrator = TranscodeOrchestrator::new(
+        rx_t,
+        store.clone(),
+        encoder,
+        cfg.transcode_tmp_dir.into(),
+        cfg.transcode_retention_dir.into(),
+        cfg.transcode_min_size_reduction,
+    );
+
+    // Recovery: re-enqueue files stuck in Transcoding state
+    let stuck_ids = store
+        .fetch_files_in_state(WorkflowStateTag::Transcoding)
+        .await?;
+    for id in stuck_ids {
+        tx_t.send(id).await?;
+        info!(?id, "recovered stuck transcode file");
+    }
+
     let token = CancellationToken::new();
     let mut join_set = JoinSet::new();
 
     join_set.spawn(postgres_listener.listen(token.child_token()));
     join_set.spawn(workflow_orchestrator.run(token.child_token()));
+    join_set.spawn(transcode_orchestrator.run(token.child_token()));
     join_set.spawn(
         approval_orchestrator
             .clone()

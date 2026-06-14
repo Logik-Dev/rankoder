@@ -52,6 +52,7 @@ pub struct MediaFile {
     pub movie_id: Option<MovieId>,
     pub path: AbsoluteFilePath,
     pub video_properties: Option<VideoProperties>,
+    pub transcode_spec: Option<serde_json::Value>,
     pub workflow_state: WorkflowStateTag,
 }
 

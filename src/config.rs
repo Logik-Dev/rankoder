@@ -25,6 +25,11 @@ pub struct AppConfig {
     pub mqtt_port: u16,
     pub mqtt_client_id: String,
     pub approval_max_pending: usize,
+    pub transcode_tmp_dir: String,
+    pub transcode_retention_dir: String,
+    pub transcode_encoder_override: String,
+    pub transcode_min_size_reduction: f64,
+    pub transcode_retention_days: i32,
 }
 
 impl AppConfig {
@@ -45,6 +50,13 @@ impl AppConfig {
             mqtt_port: parse_env("MQTT_PORT", 1883)?,
             mqtt_client_id: parse_env("MQTT_CLIENT_ID", "rankoder".to_string())?,
             approval_max_pending: parse_env("APPROVAL_MAX_PENDING", 1)?,
+            transcode_tmp_dir: env::var("TRANSCODE_TMP_DIR")
+                .map_err(|_| ConfigError::Missing("TRANSCODE_TMP_DIR".into()))?,
+            transcode_retention_dir: env::var("TRANSCODE_RETENTION_DIR")
+                .map_err(|_| ConfigError::Missing("TRANSCODE_RETENTION_DIR".into()))?,
+            transcode_encoder_override: parse_env("TRANSCODE_ENCODER", "auto".to_string())?,
+            transcode_min_size_reduction: parse_env("TRANSCODE_MIN_SIZE_REDUCTION", 0.1)?,
+            transcode_retention_days: parse_env("TRANSCODE_RETENTION_DAYS", 7)?,
         })
     }
 }

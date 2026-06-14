@@ -16,4 +16,5 @@ pub(super) struct MediaFileRow {
     pub bitrate_kbps: Option<i32>,
     pub framerate: Option<String>,
     pub duration_seconds: Option<f64>,
+    pub transcode_spec: Option<serde_json::Value>,
 }

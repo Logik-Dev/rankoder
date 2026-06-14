@@ -20,6 +20,7 @@ pub struct WorkflowOrchestrator {
     prober: Arc<dyn Prober>,
     analysis_orchestrator: AnalysisOrchestrator,
     approval_orchestrator: Arc<ApprovalOrchestrator>,
+    transcode_tx: mpsc::Sender<MediaFileId>,
 }
 
 impl WorkflowOrchestrator {
@@ -29,6 +30,7 @@ impl WorkflowOrchestrator {
         prober: Arc<dyn Prober>,
         analysis_orchestrator: AnalysisOrchestrator,
         approval_orchestrator: Arc<ApprovalOrchestrator>,
+        transcode_tx: mpsc::Sender<MediaFileId>,
     ) -> Self {
         Self {
             rx,
@@ -36,6 +38,7 @@ impl WorkflowOrchestrator {
             prober,
             analysis_orchestrator,
             approval_orchestrator,
+            transcode_tx,
         }
     }
 
@@ -51,6 +54,7 @@ impl WorkflowOrchestrator {
         let prober = self.prober;
         let analysis = self.analysis_orchestrator;
         let approval = self.approval_orchestrator;
+        let transcode_tx = self.transcode_tx;
         let mut rx = self.rx;
 
         let mut pending = VecDeque::new();
@@ -72,9 +76,10 @@ impl WorkflowOrchestrator {
                     let p = Arc::clone(&prober);
                     let a = analysis.clone();
                     let ap = Arc::clone(&approval);
+                    let tt = transcode_tx.clone();
 
                     join_set.spawn(async move {
-                        if let Err(e) = Self::process_file(s, p, a, ap, media_file_id).await {
+                        if let Err(e) = Self::process_file(s, p, a, ap, tt, media_file_id).await {
                             error!(%e, "failed to process file");
                         }
                     });
@@ -98,12 +103,13 @@ impl WorkflowOrchestrator {
         Ok(())
     }
 
-    #[instrument(skip(store, prober, analysis, approval), fields(id = ?media_file_id), err)]
+    #[instrument(skip(store, prober, analysis, approval, transcode_tx), fields(id = ?media_file_id), err)]
     async fn process_file(
         store: Arc<MediaStore>,
         prober: Arc<dyn Prober>,
         analysis: AnalysisOrchestrator,
         approval: Arc<ApprovalOrchestrator>,
+        transcode_tx: mpsc::Sender<MediaFileId>,
         media_file_id: MediaFileId,
     ) -> Result<()> {
         let Ok(media_file) = store.find_media_file_by_id(&media_file_id).await else {
@@ -170,10 +176,14 @@ impl WorkflowOrchestrator {
                 approval.wake_feeder();
             }
             WorkflowStateTag::PendingApproval
-            | WorkflowStateTag::Transcoding
             | WorkflowStateTag::Done
             | WorkflowStateTag::Skipped
             | WorkflowStateTag::Failed => {}
+            WorkflowStateTag::Transcoding => {
+                if let Err(e) = transcode_tx.send(media_file_id).await {
+                    error!(?media_file_id, "failed to send to transcode channel: {e}");
+                }
+            }
         }
 
         Ok(())
