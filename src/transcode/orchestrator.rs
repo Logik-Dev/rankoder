@@ -197,6 +197,8 @@ impl TranscodeOrchestrator {
         args.insert(0, "-nostdin".into());
         args.insert(0, "-y".into());
 
+        let temp_guard = ScopedTemp::new(temp_path.clone());
+
         let output = tokio::process::Command::new("ffmpeg")
             .arg("-i")
             .arg(&original_path)
@@ -217,7 +219,6 @@ impl TranscodeOrchestrator {
                 %stderr,
                 "ffmpeg encode failed"
             );
-            let _ = tokio::fs::remove_file(&temp_path).await;
             return Err(TranscodeError::FfmpegFailed {
                 exit_code: output.status.code(),
                 stderr,
@@ -234,7 +235,6 @@ impl TranscodeOrchestrator {
             }
             Err(e) => {
                 warn!(%e, ?media_file_id, "validation failed");
-                let _ = tokio::fs::remove_file(&temp_path).await;
                 return Err(TranscodeError::Validation(e));
             }
         };
@@ -250,7 +250,6 @@ impl TranscodeOrchestrator {
                 threshold = %min_acceptable,
                 "insufficient size reduction, skipping"
             );
-            let _ = tokio::fs::remove_file(&temp_path).await;
             return Ok(TranscodeOutcome::Skipped(
                 SkipReason::InsufficientSizeReduction,
             ));
@@ -260,6 +259,8 @@ impl TranscodeOrchestrator {
         let result = swapper
             .atomic_swap(&original_path, &temp_path, retention_dir, media_file_id)
             .await?;
+
+        temp_guard.disarm();
 
         let final_abs = AbsoluteFilePath::new(&result.final_path)?;
 
@@ -358,5 +359,26 @@ impl TranscodeOrchestrator {
         }
 
         Ok(())
+    }
+}
+
+/// Guard that removes the temporary file when dropped unless explicitly
+/// disarmed. Ensures cleanup on early returns without scattering
+/// `remove_file` calls throughout the transcode flow.
+struct ScopedTemp(PathBuf);
+
+impl ScopedTemp {
+    fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    fn disarm(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for ScopedTemp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
