@@ -29,6 +29,20 @@ struct RawStream {
     codec_type: String,
     codec_name: Option<String>,
     bit_rate: Option<String>,
+    #[serde(default)]
+    disposition: RawDisposition,
+}
+
+impl RawStream {
+    fn is_attached_pic(&self) -> bool {
+        self.disposition.attached_pic == Some(1)
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawDisposition {
+    #[serde(default)]
+    attached_pic: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,7 +99,7 @@ fn parse_probe_output(
     let video_stream = raw
         .streams
         .iter()
-        .find(|s| s.codec_type == "video")
+        .find(|s| s.codec_type == "video" && !s.is_attached_pic())
         .ok_or_else(|| ValidationError::FfprobeFailed("no video stream".into()))?;
 
     let codec_name = video_stream.codec_name.as_deref().unwrap_or("unknown");
@@ -280,5 +294,50 @@ mod tests {
 
         let result = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap();
         assert!(result.bitrate.is_none());
+    }
+
+    #[test]
+    fn attached_pic_stream_is_ignored() {
+        let json = r#"{
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "mjpeg",
+                    "disposition": { "attached_pic": 1 }
+                },
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "disposition": { "attached_pic": 0 }
+                }
+            ],
+            "format": {
+                "duration": "3600.000000",
+                "size": "500000000"
+            }
+        }"#;
+
+        let result = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap();
+        assert_eq!(result.size_bytes.as_u64(), 500_000_000);
+    }
+
+    #[test]
+    fn only_attached_pic_stream_fails() {
+        let json = r#"{
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "mjpeg",
+                    "disposition": { "attached_pic": 1 }
+                }
+            ],
+            "format": {
+                "duration": "3600.000000",
+                "size": "500000000"
+            }
+        }"#;
+
+        let err = parse_probe_output(json.as_bytes(), Some(3600.0), 1.0).unwrap_err();
+        assert!(matches!(err, ValidationError::FfprobeFailed(_)));
     }
 }
