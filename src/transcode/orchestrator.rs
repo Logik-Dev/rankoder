@@ -364,3 +364,275 @@ impl Drop for ScopedTemp {
         let _ = std::fs::remove_file(&self.0);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! End-to-end tests for the core transcode logic (`transcode_file`), which
+    //! is store-free and therefore needs no database — only a real `ffmpeg`.
+    //! Encoder is forced to `Libx265` (software, always available, no GPU) so
+    //! the tests behave identically on any host. Each test runs in an isolated
+    //! temp directory and is skipped gracefully when `ffmpeg` is absent.
+
+    use super::*;
+    use crate::models::media_file::SizeBytes;
+    use crate::models::video::{DurationSecs, Resolution, VideoProperties};
+    use uuid::Uuid;
+
+    fn ffmpeg_available() -> bool {
+        std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    struct Workspace {
+        base: PathBuf,
+        lib: PathBuf,
+        tmp: PathBuf,
+        retention: PathBuf,
+    }
+
+    impl Workspace {
+        async fn new() -> Self {
+            let base = std::env::temp_dir().join(format!("rk_e2e_{}", Uuid::now_v7()));
+            let lib = base.join("lib");
+            let tmp = base.join("tmp");
+            let retention = base.join("retention");
+            for d in [&lib, &tmp, &retention] {
+                tokio::fs::create_dir_all(d).await.unwrap();
+            }
+            Self {
+                base,
+                lib,
+                tmp,
+                retention,
+            }
+        }
+    }
+
+    impl Drop for Workspace {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    /// Produces a deliberately large (near-lossless) h264 source so the HEVC
+    /// re-encode is reliably smaller, keeping the `Completed` path deterministic.
+    /// Output is captured (not inherited) and ffmpeg is silenced to keep test
+    /// logs clean.
+    async fn make_h264_source(path: &Path, secs: u32) {
+        let out = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostats",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc2=size=1280x720:rate=24:duration={secs}"),
+                "-c:v",
+                "libx264",
+                "-qp",
+                "0",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(path)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "failed to generate test source: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    async fn probe_codec(path: &Path) -> String {
+        let out = tokio::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "quiet",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(path)
+            .output()
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// `declared_size` becomes `video_properties.size_bytes`, which drives the
+    /// reduction threshold (not the real file size) — letting each test force a
+    /// `Completed` or `Skipped` outcome deterministically.
+    fn media_file(
+        path: &Path,
+        duration_secs: f64,
+        declared_size: u64,
+        crf: Option<u8>,
+    ) -> MediaFile {
+        MediaFile {
+            id: MediaFileId::new(),
+            episode_id: None,
+            movie_id: None,
+            path: AbsoluteFilePath::new(path).unwrap(),
+            video_properties: Some(VideoProperties {
+                video_codec: "h264".parse().unwrap(),
+                resolution: Resolution::new(720, 1280).unwrap(),
+                bitrate: None,
+                framerate: None,
+                size_bytes: SizeBytes::new(declared_size).unwrap(),
+                duration: Some(DurationSecs::new(duration_secs).unwrap()),
+                color_metadata: None,
+            }),
+            transcode_spec: crf.map(|c| serde_json::json!({ "crf": c })),
+            workflow_state: WorkflowStateTag::Transcoding,
+        }
+    }
+
+    async fn dir_is_empty(dir: &Path) -> bool {
+        tokio::fs::read_dir(dir)
+            .await
+            .unwrap()
+            .next_entry()
+            .await
+            .unwrap()
+            .is_none()
+    }
+
+    #[tokio::test]
+    async fn completes_and_swaps_to_hevc() {
+        if !ffmpeg_available() {
+            eprintln!("ffmpeg not available, skipping");
+            return;
+        }
+
+        let ws = Workspace::new().await;
+        let src = ws.lib.join("movie.mp4");
+        make_h264_source(&src, 1).await;
+        let real_size = tokio::fs::metadata(&src).await.unwrap().len();
+
+        // Declared size == real size; require only a 5% reduction.
+        let mf = media_file(&src, 1.0, real_size, Some(28));
+
+        let outcome = TranscodeOrchestrator::transcode_file(
+            Encoder::Libx265,
+            &ws.tmp,
+            &ws.retention,
+            0.05,
+            &mf,
+        )
+        .await
+        .expect("transcode_file should succeed");
+
+        let TranscodeOutcome::Completed(c) = outcome else {
+            panic!("expected Completed, got {outcome:?}");
+        };
+
+        let final_path = c.final_path.as_ref();
+        assert_eq!(final_path.extension().and_then(|e| e.to_str()), Some("mkv"));
+        assert!(final_path.exists(), "final file should exist");
+        assert_eq!(probe_codec(final_path).await, "hevc");
+        assert!(!src.exists(), "original should have been moved out");
+        assert!(c.retention_path.exists(), "backup should be in retention");
+        assert!(dir_is_empty(&ws.tmp).await, "temp dir should be empty");
+    }
+
+    #[tokio::test]
+    async fn skips_when_reduction_insufficient() {
+        if !ffmpeg_available() {
+            eprintln!("ffmpeg not available, skipping");
+            return;
+        }
+
+        let ws = Workspace::new().await;
+        let src = ws.lib.join("movie.mp4");
+        make_h264_source(&src, 1).await;
+
+        // Declare a tiny original size: the real HEVC output cannot beat the
+        // resulting threshold, forcing the Skipped path.
+        let mf = media_file(&src, 1.0, 5_000, Some(28));
+
+        let outcome = TranscodeOrchestrator::transcode_file(
+            Encoder::Libx265,
+            &ws.tmp,
+            &ws.retention,
+            0.1,
+            &mf,
+        )
+        .await
+        .expect("transcode_file should succeed");
+
+        assert!(
+            matches!(
+                outcome,
+                TranscodeOutcome::Skipped(SkipReason::InsufficientSizeReduction)
+            ),
+            "expected Skipped, got {outcome:?}"
+        );
+        assert!(src.exists(), "original must be left untouched");
+        assert!(dir_is_empty(&ws.retention).await, "no retention on skip");
+        assert!(dir_is_empty(&ws.tmp).await, "temp dir should be cleaned");
+    }
+
+    #[tokio::test]
+    async fn ffmpeg_failure_is_terminal_and_cleans_temp() {
+        if !ffmpeg_available() {
+            eprintln!("ffmpeg not available, skipping");
+            return;
+        }
+
+        let ws = Workspace::new().await;
+        let src = ws.lib.join("not-a-video.mp4");
+        tokio::fs::write(&src, b"this is plain text, not a video")
+            .await
+            .unwrap();
+
+        let mf = media_file(&src, 1.0, 1_000_000, Some(28));
+
+        let err = TranscodeOrchestrator::transcode_file(
+            Encoder::Libx265,
+            &ws.tmp,
+            &ws.retention,
+            0.05,
+            &mf,
+        )
+        .await
+        .expect_err("ffmpeg should fail on a non-video input");
+
+        assert!(matches!(err, TranscodeError::FfmpegFailed { .. }));
+        assert!(err.is_terminal());
+        assert!(dir_is_empty(&ws.tmp).await, "temp dir should be cleaned");
+    }
+
+    #[tokio::test]
+    async fn missing_spec_errors_before_encoding() {
+        // Returns before any ffmpeg invocation, so no availability guard needed.
+        let ws = Workspace::new().await;
+        let src = ws.lib.join("movie.mp4");
+        tokio::fs::write(&src, b"placeholder").await.unwrap();
+
+        let mf = media_file(&src, 1.0, 1_000_000, None);
+
+        let err = TranscodeOrchestrator::transcode_file(
+            Encoder::Libx265,
+            &ws.tmp,
+            &ws.retention,
+            0.05,
+            &mf,
+        )
+        .await
+        .expect_err("missing crf should error");
+
+        assert!(matches!(err, TranscodeError::MissingSpec));
+        assert!(err.is_terminal());
+    }
+}
