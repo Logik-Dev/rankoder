@@ -11,6 +11,7 @@ pub enum DetectError {
 #[derive(Debug, Error)]
 pub enum TranscodeError {
     #[error("ffmpeg failed with exit code {exit_code:?}: {stderr}")]
+    #[allow(dead_code)]
     FfmpegFailed {
         exit_code: Option<i32>,
         stderr: String,
@@ -18,6 +19,7 @@ pub enum TranscodeError {
     #[error("validation failed: {0}")]
     Validation(#[from] ValidationError),
     #[error("insufficient size reduction: original {original}, new {new}")]
+    #[allow(dead_code)]
     InsufficientSizeReduction { original: u64, new: u64 },
     #[error("swap failed: {0}")]
     SwapFailed(#[from] std::io::Error),

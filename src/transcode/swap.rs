@@ -8,6 +8,7 @@ use crate::{models::media_file::MediaFileId, transcode::error::TranscodeError};
 #[async_trait]
 pub trait FileSystem: Send + Sync {
     async fn rename(&self, from: &Path, to: &Path) -> Result<(), std::io::Error>;
+    #[allow(dead_code)]
     async fn remove_file(&self, path: &Path) -> Result<(), std::io::Error>;
     async fn exists(&self, path: &Path) -> bool;
 }
@@ -51,22 +52,8 @@ impl<FS: FileSystem> Swapper<FS> {
         retention_dir: &Path,
         media_file_id: MediaFileId,
     ) -> Result<SwapResult, TranscodeError> {
-        let filename = original
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file");
-
-        let retention_path = retention_dir.join(format!("{}_{filename}", media_file_id.as_uuid()));
-        let final_path = original
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(format!(
-                "{}.mkv",
-                original
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("output")
-            ));
+        let (retention_path, final_path) =
+            crate::transcode::compute_swap_paths(original, retention_dir, media_file_id);
 
         info!(
             ?media_file_id,

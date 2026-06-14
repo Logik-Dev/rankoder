@@ -20,7 +20,7 @@ impl Encoder {
     pub fn build_args(&self, crf: u8, color: Option<&ColorMetadata>) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "-map".into(),
-            "0:v".into(),
+            "0:V".into(),
             "-map".into(),
             "0:a".into(),
             "-map".into(),
@@ -201,7 +201,7 @@ mod tests {
         for enc in [Encoder::Nvenc, Encoder::VideoToolbox, Encoder::Libx265] {
             let args = enc.build_args(20, None);
             assert!(args.contains(&"-map".into()));
-            assert!(args.contains(&"0:v".into()));
+            assert!(args.contains(&"0:V".into()));
             assert!(args.contains(&"0:a".into()));
             assert!(args.contains(&"0:s".into()));
             assert!(args.contains(&"-dn".into()));

@@ -41,22 +41,8 @@ pub async fn recover_stuck_transcode(
     retention_dir: &Path,
     original_duration: Option<f64>,
 ) -> Result<RecoveryAction, RecoveryError> {
-    let filename = original_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("file");
-
-    let retention_path = retention_dir.join(format!("{}_{filename}", media_file_id.as_uuid()));
-    let final_path = original_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!(
-            "{}.mkv",
-            original_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("output")
-        ));
+    let (retention_path, final_path) =
+        crate::transcode::compute_swap_paths(original_path, retention_dir, media_file_id);
 
     if !retention_path.exists() {
         return Ok(RecoveryAction::ProceedNormally);
@@ -93,10 +79,12 @@ pub async fn recover_stuck_transcode(
             retention = %retention_path.display(),
             "partial swap detected: final missing, restoring original from retention"
         );
-        tokio::fs::rename(&retention_path, original_path).await.map_err(|e| {
-            error!(%e, "failed to restore original from retention");
-            RecoveryError::Filesystem(e)
-        })?;
+        tokio::fs::rename(&retention_path, original_path)
+            .await
+            .map_err(|e| {
+                error!(%e, "failed to restore original from retention");
+                RecoveryError::Filesystem(e)
+            })?;
         info!(
             ?media_file_id,
             "original restored from retention, will retry encode"
