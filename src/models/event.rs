@@ -25,6 +25,13 @@ pub enum MediaEvent {
     PendingApproval,
     ApprovalGranted,
     ApprovalRejected,
+    Transcoded {
+        original_size: u64,
+        new_size: u64,
+    },
+    TranscodeFailed {
+        error: String,
+    },
 }
 
 #[cfg(test)]
@@ -47,9 +54,52 @@ mod tests {
     }
 
     #[test]
-    fn discovered_round_trips() {
-        let event = MediaEvent::Discovered {
-            source: "jellyfin".into(),
+    fn transcoded_serializes_with_snake_case_type_tag() {
+        let event = MediaEvent::Transcoded {
+            original_size: 5000000,
+            new_size: 2000000,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "transcoded",
+                "original_size": 5_000_000u64,
+                "new_size": 2_000_000u64,
+            })
+        );
+    }
+
+    #[test]
+    fn transcode_failed_serializes_with_snake_case_type_tag() {
+        let event = MediaEvent::TranscodeFailed {
+            error: "ffmpeg exit code 1".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "transcode_failed",
+                "error": "ffmpeg exit code 1",
+            })
+        );
+    }
+
+    #[test]
+    fn transcoded_round_trips() {
+        let event = MediaEvent::Transcoded {
+            original_size: 5_000_000,
+            new_size: 2_000_000,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: MediaEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn transcode_failed_round_trips() {
+        let event = MediaEvent::TranscodeFailed {
+            error: "encoder crash".into(),
         };
         let json = serde_json::to_string(&event).unwrap();
         let back: MediaEvent = serde_json::from_str(&json).unwrap();

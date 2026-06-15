@@ -25,7 +25,49 @@ impl WorkflowStateTag {
             (S::Analyzed, E::PendingApproval) => S::PendingApproval,
             (S::PendingApproval, E::ApprovalGranted) => S::Transcoding,
             (S::PendingApproval, E::ApprovalRejected) => S::Skipped,
+            (S::Transcoding, E::Transcoded { .. }) => S::Done,
+            (S::Transcoding, E::TranscodeFailed { .. }) => S::Failed,
+            (S::Transcoding, E::Skipped { .. }) => S::Skipped,
             _ => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{event::MediaEvent, transcode::SkipReason};
+
+    #[test]
+    fn transcoding_to_done_on_transcoded() {
+        assert_eq!(
+            WorkflowStateTag::Transcoding.next_on(&MediaEvent::Transcoded {
+                original_size: 5000000,
+                new_size: 2000000,
+            }),
+            Some(WorkflowStateTag::Done)
+        );
+    }
+
+    #[test]
+    fn transcoding_to_failed_on_transcode_failed() {
+        assert_eq!(
+            WorkflowStateTag::Transcoding.next_on(&MediaEvent::TranscodeFailed {
+                error: "boom".into(),
+            }),
+            Some(WorkflowStateTag::Failed)
+        );
+    }
+
+    #[test]
+    fn transcoding_to_skipped_on_skipped() {
+        assert_eq!(
+            WorkflowStateTag::Transcoding.next_on(&MediaEvent::Skipped {
+                reason: SkipReason::InsufficientSizeReduction,
+                bpp: None,
+                compression_potential: None,
+            }),
+            Some(WorkflowStateTag::Skipped)
+        );
     }
 }

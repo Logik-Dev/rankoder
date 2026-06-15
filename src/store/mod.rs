@@ -6,14 +6,16 @@ use uuid::Uuid;
 
 use crate::{
     models::{
+        RetentionFileId,
         batch::BatchKey,
+        common::AbsoluteFilePath,
         drafts::{EpisodeDraft, MovieDraft, SeriesDraft},
         event::MediaEvent,
-        media_file::{MediaFile, MediaFileId},
+        media_file::{MediaFile, MediaFileId, SizeBytes},
         movie::MovieId,
         series::SeriesId,
         transcode::TranscodeDecision,
-        video::VideoProperties,
+        video::{Bitrate, VideoProperties},
         workflow::WorkflowStateTag,
     },
     store::{dto::MediaFileRow, error::StoreError},
@@ -542,6 +544,118 @@ impl MediaStore {
                 })
             }
         }
+    }
+    pub async fn fetch_files_in_state(
+        &self,
+        state: WorkflowStateTag,
+    ) -> Result<Vec<MediaFileId>, StoreError> {
+        let rows = sqlx::query!(
+            r#"SELECT id FROM media_files WHERE workflow_state = $1"#,
+            state as WorkflowStateTag,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn complete_transcode(
+        &self,
+        media_file_id: &MediaFileId,
+        new_path: &AbsoluteFilePath,
+        new_size: SizeBytes,
+        new_bitrate: Option<&Bitrate>,
+        original_size: SizeBytes,
+        retention_path: &str,
+    ) -> Result<(), StoreError> {
+        let new_path_str = new_path.as_ref().to_str().ok_or_else(|| {
+            StoreError::Domain(crate::models::error::DomainError::InvalidPath(
+                "<non-UTF-8>".into(),
+            ))
+        })?;
+
+        let mut tx = self.pool.begin().await?;
+
+        let result = sqlx::query!(
+            r#"
+                UPDATE media_files
+                SET file_path = $1, size_bytes = $2, video_codec = 'hevc',
+                    bitrate_kbps = $3, workflow_state = $4
+                WHERE id = $5 AND workflow_state = $6
+            "#,
+            new_path_str,
+            new_size.as_u64() as i64,
+            new_bitrate.map(|b| b.as_bps() as i32),
+            WorkflowStateTag::Done as WorkflowStateTag,
+            media_file_id.as_uuid(),
+            WorkflowStateTag::Transcoding as WorkflowStateTag,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StoreError::StaleState {
+                expected: WorkflowStateTag::Transcoding,
+            });
+        }
+
+        let event = serde_json::to_value(&MediaEvent::Transcoded {
+            original_size: original_size.as_u64(),
+            new_size: new_size.as_u64(),
+        })?;
+
+        sqlx::query!(
+            r#"INSERT INTO events(media_file_id, event) VALUES($1, $2)"#,
+            media_file_id.as_uuid(),
+            event,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query!(
+            r#"
+                INSERT INTO retention_files (media_file_id, retained_path, original_size_bytes)
+                VALUES ($1, $2, $3)
+            "#,
+            media_file_id.as_uuid(),
+            retention_path,
+            original_size.as_u64() as i64,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn fetch_expired_retention_files(
+        &self,
+        retention_days: i32,
+    ) -> Result<Vec<(RetentionFileId, String)>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+                SELECT id, retained_path
+                FROM retention_files
+                WHERE moved_at < NOW() - make_interval(days => $1)
+            "#,
+            retention_days,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (RetentionFileId::from(r.id), r.retained_path))
+            .collect())
+    }
+
+    pub async fn delete_retention_file(&self, id: &RetentionFileId) -> Result<(), StoreError> {
+        sqlx::query!(r#"DELETE FROM retention_files WHERE id = $1"#, id.as_uuid(),)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
     }
 }
 

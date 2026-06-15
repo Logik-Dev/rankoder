@@ -8,6 +8,7 @@ pub enum SkipReason {
     AlreadyCompressed,
     InsufficientCompressionPotential,
     MissingProbeData,
+    InsufficientSizeReduction,
 }
 
 #[derive(Debug)]

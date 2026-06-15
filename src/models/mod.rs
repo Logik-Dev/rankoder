@@ -37,3 +37,7 @@ macro_rules! impl_entity_id {
         }
     };
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RetentionFileId(pub(crate) uuid::Uuid);
+impl_entity_id!(RetentionFileId);
