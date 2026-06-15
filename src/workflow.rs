@@ -172,13 +172,16 @@ impl WorkflowOrchestrator {
                     error!(%error, ?media_file_id, "analysis failed");
                 }
             }
-            WorkflowStateTag::Analyzed => {
-                approval.wake_feeder();
-            }
-            WorkflowStateTag::PendingApproval
+            WorkflowStateTag::Analyzed
             | WorkflowStateTag::Done
             | WorkflowStateTag::Skipped
-            | WorkflowStateTag::Failed => {}
+            | WorkflowStateTag::Failed => {
+                approval.wake_feeder();
+            }
+
+            // no op
+            WorkflowStateTag::PendingApproval => {}
+
             WorkflowStateTag::Transcoding => {
                 if let Err(e) = transcode_tx.send(media_file_id).await {
                     error!(?media_file_id, "failed to send to transcode channel: {e}");

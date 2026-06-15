@@ -49,15 +49,15 @@ impl ApprovalOrchestrator {
     }
 
     async fn top_up(&self, capacity: usize) {
-        let pending = match self.store.count_pending_batches().await {
+        let in_flight = match self.store.count_in_flight_batches().await {
             Ok(n) => n,
             Err(e) => {
-                error!("failed to count pending batches: {e}");
+                error!("failed to count in_flight batches: {e}");
                 return;
             }
         };
 
-        let slots = capacity as i64 - pending;
+        let slots = capacity as i64 - in_flight;
         if slots <= 0 {
             return;
         }

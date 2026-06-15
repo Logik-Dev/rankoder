@@ -362,15 +362,15 @@ impl MediaStore {
         }
     }
 
-    pub async fn count_pending_batches(&self) -> Result<i64, StoreError> {
+    pub async fn count_in_flight_batches(&self) -> Result<i64, StoreError> {
         let row = sqlx::query!(
             r#"
             SELECT (
                 (SELECT COUNT(DISTINCT (e.series_id, e.season_number))
                  FROM media_files mf JOIN episodes e ON mf.episode_id = e.id
-                 WHERE mf.workflow_state = 'pending_approval')
+                 WHERE mf.workflow_state IN ('pending_approval', 'transcoding'))
               + (SELECT COUNT(*) FROM media_files
-                 WHERE movie_id IS NOT NULL AND workflow_state = 'pending_approval')
+                 WHERE movie_id IS NOT NULL AND workflow_state IN ('pending_approval', 'transcoding'))
             ) AS count
             "#
         )
@@ -725,4 +725,128 @@ fn bytes_to_gb(bytes: i64) -> f64 {
 
 fn round_1dp(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    async fn connect_db() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").ok()?;
+        PgPool::connect(&url).await.ok()
+    }
+
+    /// Inserts a movie + one media_file in the given state. Returns the movie id
+    /// (deleting it cascades to the media_file).
+    async fn insert_movie_file(pool: &PgPool, state: WorkflowStateTag) -> Uuid {
+        let movie_id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO movies (id, title) VALUES ($1, 'in-flight test')",
+            movie_id,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let file_id = Uuid::now_v7();
+        sqlx::query!(
+            r#"INSERT INTO media_files (id, movie_id, file_path, workflow_state)
+               VALUES ($1, $2, $3, $4)"#,
+            file_id,
+            movie_id,
+            format!("/tmp/inflight_{file_id}.mkv"),
+            state as WorkflowStateTag,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        movie_id
+    }
+
+    /// Inserts a series + a single season of `episodes` episodes, each with one
+    /// media_file in the given state. Returns the series id (cascade-deletes).
+    async fn insert_season_files(pool: &PgPool, state: WorkflowStateTag, episodes: i16) -> Uuid {
+        let series_id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO series (id, title) VALUES ($1, 'in-flight series')",
+            series_id,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        for ep in 1..=episodes {
+            let ep_id = Uuid::now_v7();
+            sqlx::query!(
+                r#"INSERT INTO episodes (id, series_id, season_number, episode_number, title)
+                   VALUES ($1, $2, 1, $3, 'ep')"#,
+                ep_id,
+                series_id,
+                ep,
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+
+            let file_id = Uuid::now_v7();
+            sqlx::query!(
+                r#"INSERT INTO media_files (id, episode_id, file_path, workflow_state)
+                   VALUES ($1, $2, $3, $4)"#,
+                file_id,
+                ep_id,
+                format!("/tmp/inflight_ep_{file_id}.mkv"),
+                state as WorkflowStateTag,
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+
+        series_id
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn count_in_flight_includes_transcoding_and_pending_not_terminal() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+
+        // Delta against a baseline so any pre-existing rows cancel out; #[serial]
+        // guarantees no concurrent churn of in-flight states during the test.
+        let baseline = store.count_in_flight_batches().await.unwrap();
+
+        let m_transcoding = insert_movie_file(&pool, WorkflowStateTag::Transcoding).await;
+        let m_pending = insert_movie_file(&pool, WorkflowStateTag::PendingApproval).await;
+        let season = insert_season_files(&pool, WorkflowStateTag::Transcoding, 2).await;
+
+        // Non in-flight: must not be counted.
+        let m_analyzed = insert_movie_file(&pool, WorkflowStateTag::Analyzed).await;
+        let m_done = insert_movie_file(&pool, WorkflowStateTag::Done).await;
+
+        let after = store.count_in_flight_batches().await.unwrap();
+        assert_eq!(
+            after - baseline,
+            3,
+            "2 in-flight movies + 1 in-flight season (multi-episode = one batch); \
+             analyzed/done excluded"
+        );
+
+        for id in [m_transcoding, m_pending, m_analyzed, m_done] {
+            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query!("DELETE FROM series WHERE id = $1", season)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 }

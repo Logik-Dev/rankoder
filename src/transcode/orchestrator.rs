@@ -643,6 +643,7 @@ mod tests {
     // tests are safe to run in parallel.
 
     use crate::store::MediaStore;
+    use serial_test::serial;
     use sqlx::PgPool;
 
     async fn connect_db() -> Option<PgPool> {
@@ -734,6 +735,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn process_file_completed_marks_done_with_retention() {
         let Some(pool) = connect_db().await else {
             eprintln!("DATABASE_URL not set, skipping");
@@ -774,6 +776,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn process_file_skipped_marks_skipped_without_retention() {
         let Some(pool) = connect_db().await else {
             eprintln!("DATABASE_URL not set, skipping");
@@ -814,6 +817,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn process_file_terminal_error_marks_failed() {
         let Some(pool) = connect_db().await else {
             eprintln!("DATABASE_URL not set, skipping");
