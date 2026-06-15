@@ -32,6 +32,8 @@ pub struct AppConfig {
     pub transcode_retention_days: i32,
     pub radarr_url: Option<String>,
     pub radarr_api_key: Option<String>,
+    pub sonarr_url: Option<String>,
+    pub sonarr_api_key: Option<String>,
 }
 
 impl AppConfig {
@@ -60,9 +62,11 @@ impl AppConfig {
             transcode_min_size_reduction: parse_env("TRANSCODE_MIN_SIZE_REDUCTION", 0.1)?,
             transcode_retention_days: parse_env("TRANSCODE_RETENTION_DAYS", 7)?,
             // Optional: when unset, no media-manager refresh is performed after
-            // a transcode completes.
+            // a transcode completes. Radarr handles movies, Sonarr series.
             radarr_url: env::var("RADARR_URL").ok(),
             radarr_api_key: env::var("RADARR_API_KEY").ok(),
+            sonarr_url: env::var("SONARR_URL").ok(),
+            sonarr_api_key: env::var("SONARR_API_KEY").ok(),
         })
     }
 }

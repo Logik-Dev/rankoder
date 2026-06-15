@@ -6,6 +6,8 @@ pub enum ProviderError {
     RequestError(#[from] reqwest::Error),
     #[error("tmdb id not found")]
     TmdbIdNotFound,
+    #[error("tvdb id not found")]
+    TvdbIdNotFound,
     #[error("invalid url")]
     InvalidUrl,
     #[error("invalid api key")]

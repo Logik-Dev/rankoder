@@ -24,7 +24,7 @@ impl MovieProvider for JellyfinProvider {
 
     fn map_to_movie_draft(&self, item: JellyfinItem) -> Result<MovieDraft, ProviderError> {
         let rating = map_to_rating(item.community_rating);
-        let tmdb_id = map_to_tmdb_id(item.provider_ids);
+        let tmdb_id = map_to_tmdb_id(&item.provider_ids);
         let path = map_to_absolute_file_path(item.path)?;
 
         Ok(MovieDraft {

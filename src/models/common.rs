@@ -28,6 +28,29 @@ impl FromStr for TmdbId {
 
 #[derive(Debug, sqlx::Type)]
 #[sqlx(transparent)]
+pub struct TvdbId(i32);
+
+impl TvdbId {
+    pub fn new(value: i32) -> Result<Self, DomainError> {
+        if value < 0 {
+            return Err(DomainError::InvalidTvdbId(format!("{value}")));
+        }
+
+        Ok(Self(value))
+    }
+}
+
+impl FromStr for TvdbId {
+    type Err = DomainError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse()
+            .map_err(|_| DomainError::InvalidTvdbId(s.to_string()))
+            .and_then(Self::new)
+    }
+}
+
+#[derive(Debug, sqlx::Type)]
+#[sqlx(transparent)]
 pub struct Rating(f32);
 
 impl Rating {

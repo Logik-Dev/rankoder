@@ -4,6 +4,8 @@ pub enum DomainError {
     MissingUuid,
     #[error("given string is not a valid tmdb_id {0}")]
     InvalidTmdbId(String),
+    #[error("given string is not a valid tvdb_id {0}")]
+    InvalidTvdbId(String),
     #[error("given number is not a valid rating {0}")]
     InvalidRating(f32),
     #[error("path must be absolute: {0}")]

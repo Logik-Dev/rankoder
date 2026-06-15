@@ -241,6 +241,29 @@ impl MediaStore {
         Ok(row.and_then(|r| r.tmdb_id))
     }
 
+    /// TVDB id of the series an episode file belongs to, used to ask Sonarr to
+    /// rescan it after transcoding. Returns `None` when the file is a movie
+    /// (Radarr's responsibility) or the series has no TVDB id.
+    pub async fn tvdb_id_for_episode_file(
+        &self,
+        media_file_id: &MediaFileId,
+    ) -> Result<Option<i32>, StoreError> {
+        let row = sqlx::query!(
+            r#"
+                SELECT s.tvdb_id
+                FROM media_files mf
+                JOIN episodes e ON mf.episode_id = e.id
+                JOIN series   s ON e.series_id   = s.id
+                WHERE mf.id = $1
+            "#,
+            media_file_id.as_uuid(),
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.and_then(|r| r.tvdb_id))
+    }
+
     pub async fn fetch_active_media_files(&self) -> Result<Vec<MediaFileId>, StoreError> {
         let rows = sqlx::query!(
             r#"SELECT id FROM media_files WHERE workflow_state NOT IN ('done', 'skipped', 'failed')"#

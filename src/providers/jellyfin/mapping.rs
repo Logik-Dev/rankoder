@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tracing::warn;
 
 use crate::{
-    models::common::{AbsoluteFilePath, Rating, TmdbId},
+    models::common::{AbsoluteFilePath, Rating, TmdbId, TvdbId},
     providers::error::ProviderError,
 };
 
@@ -15,10 +15,18 @@ pub(crate) fn map_to_rating(community_rating: Option<f32>) -> Option<Rating> {
     })
 }
 
-pub(crate) fn map_to_tmdb_id(provider_ids: HashMap<String, String>) -> Option<TmdbId> {
+pub(crate) fn map_to_tmdb_id(provider_ids: &HashMap<String, String>) -> Option<TmdbId> {
     provider_ids.get("Tmdb").and_then(|s| {
         s.parse::<TmdbId>()
             .inspect_err(|error| warn!(%error, "failed to parse tmdb_id"))
+            .ok()
+    })
+}
+
+pub(crate) fn map_to_tvdb_id(provider_ids: &HashMap<String, String>) -> Option<TvdbId> {
+    provider_ids.get("Tvdb").and_then(|s| {
+        s.parse::<TvdbId>()
+            .inspect_err(|error| warn!(%error, "failed to parse tvdb_id"))
             .ok()
     })
 }

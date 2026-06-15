@@ -15,10 +15,10 @@ use crate::{
     models::workflow::WorkflowStateTag,
     notification::mqtt::MqttNotifier,
     probe::FFmpeg,
-    providers::{JellyfinProvider, MediaServerNotifier, RadarrClient},
+    providers::{JellyfinProvider, MovieNotifier, RadarrClient, SeriesNotifier, SonarrClient},
     store::MediaStore,
     sync::SyncOrchestrator,
-    transcode::orchestrator::TranscodeOrchestrator,
+    transcode::orchestrator::{MediaNotifiers, TranscodeOrchestrator},
     transcode::reaper::RetentionReaper,
     workflow::WorkflowOrchestrator,
 };
@@ -117,16 +117,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encoder = transcode::detect::detect_encoder(override_enc).await?;
     info!(?encoder, "HEVC encoder selected");
 
-    // Optional: refresh Radarr after each transcode so it picks up the new
-    // file. Disabled (no-op) unless both URL and API key are configured.
-    let media_notifier: Option<Arc<dyn MediaServerNotifier>> =
+    // Optional: refresh the media manager after each transcode so it picks up
+    // the new file. Each is disabled (no-op) unless both URL and API key are
+    // configured — Radarr for movies, Sonarr for series.
+    let movie_notifier: Option<Arc<dyn MovieNotifier>> =
         match (&cfg.radarr_url, &cfg.radarr_api_key) {
             (Some(url), Some(api_key)) => {
                 info!("Radarr notifier enabled");
                 Some(Arc::new(RadarrClient::new(url, api_key)?))
             }
             _ => {
-                info!("Radarr not configured, skipping media-manager refresh");
+                info!("Radarr not configured, skipping movie refresh");
+                None
+            }
+        };
+
+    let series_notifier: Option<Arc<dyn SeriesNotifier>> =
+        match (&cfg.sonarr_url, &cfg.sonarr_api_key) {
+            (Some(url), Some(api_key)) => {
+                info!("Sonarr notifier enabled");
+                Some(Arc::new(SonarrClient::new(url, api_key)?))
+            }
+            _ => {
+                info!("Sonarr not configured, skipping series refresh");
                 None
             }
         };
@@ -138,7 +151,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.transcode_tmp_dir.into(),
         cfg.transcode_retention_dir.into(),
         cfg.transcode_min_size_reduction,
-        media_notifier,
+        MediaNotifiers {
+            movie: movie_notifier,
+            series: series_notifier,
+        },
     );
 
     // Recovery: re-enqueue files stuck in Transcoding state

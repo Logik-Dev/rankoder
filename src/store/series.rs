@@ -3,7 +3,7 @@ use tracing::{debug, instrument};
 
 use crate::{
     models::{
-        common::{Rating, TmdbId},
+        common::{Rating, TmdbId, TvdbId},
         drafts::SeriesDraft,
         series::SeriesId,
     },
@@ -59,11 +59,12 @@ pub(crate) async fn find_or_create_series(
 
     let new_id = SeriesId::new();
     sqlx::query!(
-        r#"INSERT INTO series (id, title, tmdb_id, rating)
-           VALUES ($1, $2, $3, $4)"#,
+        r#"INSERT INTO series (id, title, tmdb_id, tvdb_id, rating)
+           VALUES ($1, $2, $3, $4, $5)"#,
         new_id as SeriesId,
         draft.title,
         draft.tmdb_id.as_ref() as Option<&TmdbId>,
+        draft.tvdb_id.as_ref() as Option<&TvdbId>,
         draft.rating.as_ref() as Option<&Rating>,
     )
     .execute(&mut **tx)

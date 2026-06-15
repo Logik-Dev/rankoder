@@ -1,5 +1,5 @@
 use crate::models::{
-    common::{AbsoluteFilePath, EpisodeNumber, Rating, SeasonNumber, TmdbId},
+    common::{AbsoluteFilePath, EpisodeNumber, Rating, SeasonNumber, TmdbId, TvdbId},
     series::SeriesId,
 };
 
@@ -20,6 +20,7 @@ impl Provider {
 pub struct SeriesDraft {
     pub title: String,
     pub tmdb_id: Option<TmdbId>,
+    pub tvdb_id: Option<TvdbId>,
     pub rating: Option<Rating>,
     pub jellyfin_id: String,
     pub provider: Provider,

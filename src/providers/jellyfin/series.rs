@@ -10,7 +10,9 @@ use crate::{
     providers::{
         SeriesProvider,
         error::ProviderError,
-        jellyfin::mapping::{map_to_absolute_file_path, map_to_rating, map_to_tmdb_id},
+        jellyfin::mapping::{
+            map_to_absolute_file_path, map_to_rating, map_to_tmdb_id, map_to_tvdb_id,
+        },
     },
 };
 
@@ -38,12 +40,14 @@ impl SeriesProvider for JellyfinProvider {
 
     fn map_to_series_draft(&self, item: JellyfinItem) -> Result<SeriesDraft, ProviderError> {
         let rating = map_to_rating(item.community_rating);
-        let tmdb_id = map_to_tmdb_id(item.provider_ids);
+        let tmdb_id = map_to_tmdb_id(&item.provider_ids);
+        let tvdb_id = map_to_tvdb_id(&item.provider_ids);
 
         Ok(SeriesDraft {
             title: item.name,
             provider: Provider::Jellyfin,
             tmdb_id,
+            tvdb_id,
             rating,
             jellyfin_id: item.id,
         })
@@ -56,7 +60,7 @@ impl SeriesProvider for JellyfinProvider {
         series_id: &SeriesId,
     ) -> Result<EpisodeDraft, ProviderError> {
         let rating = map_to_rating(item.community_rating);
-        let tmdb_id = map_to_tmdb_id(item.provider_ids);
+        let tmdb_id = map_to_tmdb_id(&item.provider_ids);
         let path = map_to_absolute_file_path(item.path)?;
 
         let season_number = item

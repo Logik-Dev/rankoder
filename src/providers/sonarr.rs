@@ -4,16 +4,16 @@ use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument};
 
-use crate::providers::{MovieNotifier, error::ProviderError};
+use crate::providers::{SeriesNotifier, error::ProviderError};
 
-/// Talks to a Radarr instance over its v3 REST API to trigger a per-movie disk
+/// Talks to a Sonarr instance over its v3 REST API to trigger a per-series disk
 /// rescan after a transcode. Auth uses the `X-Api-Key` header.
-pub struct RadarrClient {
+pub struct SonarrClient {
     http: Client,
     base_url: Url,
 }
 
-impl RadarrClient {
+impl SonarrClient {
     pub fn new(url: &str, api_key: &str) -> Result<Self, ProviderError> {
         let base_url = Url::parse(url).map_err(|_| ProviderError::InvalidUrl)?;
 
@@ -27,43 +27,43 @@ impl RadarrClient {
 }
 
 #[derive(Deserialize)]
-struct RadarrMovie {
+struct SonarrSeries {
     id: i64,
 }
 
 #[derive(Serialize)]
 struct RescanCommand {
     name: &'static str,
-    #[serde(rename = "movieId")]
-    movie_id: i64,
+    #[serde(rename = "seriesId")]
+    series_id: i64,
 }
 
 #[async_trait]
-impl MovieNotifier for RadarrClient {
+impl SeriesNotifier for SonarrClient {
     #[instrument(skip(self), err)]
-    async fn refresh_movie(&self, tmdb_id: i32) -> Result<(), ProviderError> {
-        // Resolve our TMDB id to Radarr's internal movie id.
-        let movie_url = self
+    async fn refresh_series(&self, tvdb_id: i32) -> Result<(), ProviderError> {
+        // Resolve our TVDB id to Sonarr's internal series id.
+        let series_url = self
             .base_url
-            .join("api/v3/movie")
+            .join("api/v3/series")
             .map_err(|_| ProviderError::InvalidUrl)?;
 
-        let movies: Vec<RadarrMovie> = self
+        let series: Vec<SonarrSeries> = self
             .http
-            .get(movie_url)
-            .query(&[("tmdbId", tmdb_id.to_string())])
+            .get(series_url)
+            .query(&[("tvdbId", tvdb_id.to_string())])
             .send()
             .await?
             .error_for_status()?
             .json()
             .await?;
 
-        let Some(movie) = movies.into_iter().next() else {
-            return Err(ProviderError::TmdbIdNotFound);
+        let Some(series) = series.into_iter().next() else {
+            return Err(ProviderError::TvdbIdNotFound);
         };
 
-        // RescanMovie re-reads the movie folder from disk (picking up the new
-        // file and its media info) without refetching metadata from TMDB.
+        // RescanSeries re-reads the series folder from disk (picking up the new
+        // file and its media info) without refetching metadata.
         let command_url = self
             .base_url
             .join("api/v3/command")
@@ -72,14 +72,14 @@ impl MovieNotifier for RadarrClient {
         self.http
             .post(command_url)
             .json(&RescanCommand {
-                name: "RescanMovie",
-                movie_id: movie.id,
+                name: "RescanSeries",
+                series_id: series.id,
             })
             .send()
             .await?
             .error_for_status()?;
 
-        debug!(tmdb_id, radarr_movie_id = movie.id, "requested Radarr rescan");
+        debug!(tvdb_id, sonarr_series_id = series.id, "requested Sonarr rescan");
         Ok(())
     }
 }
