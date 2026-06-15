@@ -98,11 +98,9 @@ mod tests {
             let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for tests");
             let pool = PgPool::connect(&db_url).await.expect("failed to connect");
 
-            // Clean any leftover test data
-            sqlx::query!("DELETE FROM retention_files")
-                .execute(&pool)
-                .await
-                .unwrap();
+            // Assertions are scoped by retention/media_file id, so no global
+            // cleanup is needed here — a blanket DELETE would race with other
+            // DB-backed tests running in parallel.
 
             let movie_id = Uuid::now_v7();
             sqlx::query!(

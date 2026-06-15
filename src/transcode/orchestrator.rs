@@ -635,4 +635,221 @@ mod tests {
         assert!(matches!(err, TranscodeError::MissingSpec));
         assert!(err.is_terminal());
     }
+
+    // ---- Level 2: process_file end-to-end with the store -------------------
+    // These exercise the full dispatcher → store effects (state transition,
+    // retention row, event). They need a database and skip gracefully when
+    // DATABASE_URL is unset. All DB access is scoped by media_file_id so the
+    // tests are safe to run in parallel.
+
+    use crate::store::MediaStore;
+    use sqlx::PgPool;
+
+    async fn connect_db() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").ok()?;
+        PgPool::connect(&url).await.ok()
+    }
+
+    async fn insert_movie(pool: &PgPool) -> Uuid {
+        let id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO movies (id, title) VALUES ($1, $2)",
+            id,
+            "rankoder e2e",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    async fn insert_transcoding_file(
+        pool: &PgPool,
+        movie_id: Uuid,
+        path: &Path,
+        declared_size: i64,
+        crf: Option<i32>,
+    ) -> MediaFileId {
+        let id = MediaFileId::new();
+        let spec = crf.map(|c| serde_json::json!({ "crf": c }));
+        sqlx::query!(
+            r#"
+            INSERT INTO media_files
+                (id, movie_id, file_path, size_bytes, video_codec, height, width,
+                 duration_seconds, transcode_spec, workflow_state)
+            VALUES ($1, $2, $3, $4, 'h264', 720, 1280, 1.0, $5, 'transcoding')
+            "#,
+            id.as_uuid(),
+            movie_id,
+            path.to_str().unwrap(),
+            declared_size,
+            spec,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    async fn state_of(pool: &PgPool, id: MediaFileId) -> (WorkflowStateTag, String) {
+        let row = sqlx::query!(
+            r#"SELECT workflow_state as "ws: WorkflowStateTag", file_path
+               FROM media_files WHERE id = $1"#,
+            id.as_uuid(),
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        (row.ws, row.file_path)
+    }
+
+    async fn retention_count(pool: &PgPool, id: MediaFileId) -> i64 {
+        sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as "c!" FROM retention_files WHERE media_file_id = $1"#,
+            id.as_uuid(),
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn event_count(pool: &PgPool, id: MediaFileId, event_type: &str) -> i64 {
+        sqlx::query_scalar!(
+            r#"SELECT COUNT(*) as "c!" FROM events
+               WHERE media_file_id = $1 AND event->>'type' = $2"#,
+            id.as_uuid(),
+            event_type,
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn cleanup(pool: &PgPool, movie_id: Uuid) {
+        // Cascades to media_files -> events + retention_files.
+        sqlx::query!("DELETE FROM movies WHERE id = $1", movie_id)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn process_file_completed_marks_done_with_retention() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        if !ffmpeg_available() {
+            eprintln!("ffmpeg not available, skipping");
+            return;
+        }
+
+        let ws = Workspace::new().await;
+        let src = ws.lib.join("movie.mp4");
+        make_h264_source(&src, 1).await;
+        let real_size = tokio::fs::metadata(&src).await.unwrap().len() as i64;
+
+        let movie_id = insert_movie(&pool).await;
+        let id = insert_transcoding_file(&pool, movie_id, &src, real_size, Some(28)).await;
+
+        let store = Arc::new(MediaStore::new(pool.clone()));
+        TranscodeOrchestrator::process_file(
+            store,
+            Encoder::Libx265,
+            &ws.tmp,
+            &ws.retention,
+            0.05,
+            id,
+        )
+        .await
+        .unwrap();
+
+        let (state, file_path) = state_of(&pool, id).await;
+        assert_eq!(state, WorkflowStateTag::Done);
+        assert!(file_path.ends_with(".mkv"), "file_path should point to mkv");
+        assert_eq!(retention_count(&pool, id).await, 1);
+        assert_eq!(event_count(&pool, id, "transcoded").await, 1);
+
+        cleanup(&pool, movie_id).await;
+    }
+
+    #[tokio::test]
+    async fn process_file_skipped_marks_skipped_without_retention() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        if !ffmpeg_available() {
+            eprintln!("ffmpeg not available, skipping");
+            return;
+        }
+
+        let ws = Workspace::new().await;
+        let src = ws.lib.join("movie.mp4");
+        make_h264_source(&src, 1).await;
+
+        let movie_id = insert_movie(&pool).await;
+        // Tiny declared size -> reduction threshold unreachable -> Skipped.
+        let id = insert_transcoding_file(&pool, movie_id, &src, 5_000, Some(28)).await;
+
+        let store = Arc::new(MediaStore::new(pool.clone()));
+        TranscodeOrchestrator::process_file(
+            store,
+            Encoder::Libx265,
+            &ws.tmp,
+            &ws.retention,
+            0.1,
+            id,
+        )
+        .await
+        .unwrap();
+
+        let (state, file_path) = state_of(&pool, id).await;
+        assert_eq!(state, WorkflowStateTag::Skipped);
+        assert_eq!(file_path, src.to_str().unwrap(), "original path untouched");
+        assert_eq!(retention_count(&pool, id).await, 0);
+        assert_eq!(event_count(&pool, id, "skipped").await, 1);
+
+        cleanup(&pool, movie_id).await;
+    }
+
+    #[tokio::test]
+    async fn process_file_terminal_error_marks_failed() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        if !ffmpeg_available() {
+            eprintln!("ffmpeg not available, skipping");
+            return;
+        }
+
+        let ws = Workspace::new().await;
+        let src = ws.lib.join("not-a-video.mp4");
+        tokio::fs::write(&src, b"plain text, not a video")
+            .await
+            .unwrap();
+
+        let movie_id = insert_movie(&pool).await;
+        let id = insert_transcoding_file(&pool, movie_id, &src, 1_000_000, Some(28)).await;
+
+        let store = Arc::new(MediaStore::new(pool.clone()));
+        TranscodeOrchestrator::process_file(
+            store,
+            Encoder::Libx265,
+            &ws.tmp,
+            &ws.retention,
+            0.05,
+            id,
+        )
+        .await
+        .unwrap();
+
+        let (state, _) = state_of(&pool, id).await;
+        assert_eq!(state, WorkflowStateTag::Failed);
+        assert_eq!(event_count(&pool, id, "transcode_failed").await, 1);
+        assert_eq!(retention_count(&pool, id).await, 0);
+
+        cleanup(&pool, movie_id).await;
+    }
 }
