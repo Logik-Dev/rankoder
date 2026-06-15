@@ -157,7 +157,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // Recovery: re-enqueue files stuck in Transcoding state
+    // Recovery: re-enqueue files stuck in Transcoding state.
+    // Now largely redundant: the transcode orchestrator's periodic stale
+    // re-queue fires its first tick immediately on startup and recovers the
+    // same files (deduped against what's already pending/in-flight). Kept only
+    // for an immediate, per-file-logged recovery; safe to remove.
     let stuck_ids = store
         .fetch_files_in_state(WorkflowStateTag::Transcoding)
         .await?;

@@ -1,4 +1,10 @@
-use std::{collections::VecDeque, path::Path, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashSet, VecDeque},
+    path::Path,
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Result;
 use tokio::sync::mpsc;
@@ -25,6 +31,11 @@ use crate::{
         validation,
     },
 };
+
+/// How often to re-scan for files stuck in `transcoding` and re-enqueue them.
+/// A transient transcode error leaves the file in that state with no in-flight
+/// task; without this it would only be retried on the next process restart.
+const STALE_REQUEUE_INTERVAL: Duration = Duration::from_secs(300);
 
 /// Optional downstream media managers refreshed after a successful transcode:
 /// Radarr for movies, Sonarr for series. Each is `None` when unconfigured.
@@ -76,7 +87,7 @@ impl TranscodeOrchestrator {
         );
 
         let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
-        let mut join_set = JoinSet::new();
+        let mut join_set: JoinSet<MediaFileId> = JoinSet::new();
 
         let store = self.store;
         let encoder = self.encoder;
@@ -86,7 +97,17 @@ impl TranscodeOrchestrator {
         let notifiers = self.notifiers;
         let mut rx = self.rx;
 
-        let mut pending = VecDeque::new();
+        // Files queued for transcoding and those currently encoding. Both are
+        // consulted before enqueuing (`enqueue_unique`) so the periodic
+        // re-queue never schedules a file that is already pending or running.
+        let mut pending: VecDeque<MediaFileId> = VecDeque::new();
+        let mut inflight: HashSet<MediaFileId> = HashSet::new();
+
+        // Safety net for stalled work: re-enqueue files left in `transcoding`
+        // (e.g. after a transient error). The first tick fires immediately, so
+        // this also recovers files stuck across a restart.
+        let mut requeue = tokio::time::interval(STALE_REQUEUE_INTERVAL);
+        requeue.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -96,11 +117,26 @@ impl TranscodeOrchestrator {
                     break;
                 }
                 Some(media_file_id) = rx.recv() => {
-                    pending.push_back(media_file_id);
+                    enqueue_unique(&mut pending, &inflight, media_file_id);
+                }
+                _ = requeue.tick() => {
+                    match store.fetch_files_in_state(WorkflowStateTag::Transcoding).await {
+                        Ok(ids) => {
+                            let requeued = ids
+                                .into_iter()
+                                .filter(|id| enqueue_unique(&mut pending, &inflight, *id))
+                                .count();
+                            if requeued > 0 {
+                                warn!(requeued, "re-enqueued stalled transcoding files");
+                            }
+                        }
+                        Err(e) => error!(%e, "failed to scan for stalled transcoding files"),
+                    }
                 }
                 permit = semaphore.clone().acquire_owned(), if !pending.is_empty() => {
                     let media_file_id = pending.pop_front().unwrap();
-                    let _permit = permit.expect("semaphore closed");
+                    let permit = permit.expect("semaphore closed");
+                    inflight.insert(media_file_id);
                     let s = Arc::clone(&store);
                     let enc = encoder;
                     let t = tmp_dir.clone();
@@ -109,16 +145,21 @@ impl TranscodeOrchestrator {
                     let n = notifiers.clone();
 
                     join_set.spawn(async move {
+                        // Hold the permit for the whole encode so Semaphore(1)
+                        // actually serializes transcoding.
+                        let _permit = permit;
                         if let Err(e) =
                             Self::process_file(s, enc, &t, &r, msr, n, media_file_id).await
                         {
                             error!(%e, ?media_file_id, "transcode failed");
                         }
+                        media_file_id
                     });
                 }
                 Some(res) = join_set.join_next() => {
-                    if let Err(e) = res {
-                        error!("transcode worker task panicked: {e}");
+                    match res {
+                        Ok(id) => { inflight.remove(&id); }
+                        Err(e) => error!("transcode worker task panicked: {e}"),
                     }
                 }
                 else => break,
@@ -126,8 +167,9 @@ impl TranscodeOrchestrator {
         }
 
         while let Some(res) = join_set.join_next().await {
-            if let Err(e) = res {
-                error!("transcode worker task panicked: {e}");
+            match res {
+                Ok(id) => { inflight.remove(&id); }
+                Err(e) => error!("transcode worker task panicked: {e}"),
             }
         }
 
@@ -424,6 +466,22 @@ impl TranscodeOrchestrator {
     }
 }
 
+/// Push `id` onto `pending` unless it is already queued or currently being
+/// transcoded. Returns whether it was newly enqueued. This single gate keeps
+/// the periodic stale re-queue from scheduling a file twice or restarting an
+/// in-progress encode.
+fn enqueue_unique(
+    pending: &mut VecDeque<MediaFileId>,
+    inflight: &HashSet<MediaFileId>,
+    id: MediaFileId,
+) -> bool {
+    if inflight.contains(&id) || pending.contains(&id) {
+        return false;
+    }
+    pending.push_back(id);
+    true
+}
+
 /// Guard that removes the temporary file when dropped unless explicitly
 /// disarmed. Ensures cleanup on early returns without scattering
 /// `remove_file` calls throughout the transcode flow.
@@ -457,6 +515,38 @@ mod tests {
     use crate::models::media_file::SizeBytes;
     use crate::models::video::{DurationSecs, Resolution, VideoProperties};
     use uuid::Uuid;
+
+    // ---- enqueue_unique dedup (pure, no DB/ffmpeg) -------------------------
+
+    #[test]
+    fn enqueue_unique_adds_when_absent() {
+        let mut pending = VecDeque::new();
+        let inflight = HashSet::new();
+        let id = MediaFileId::new();
+
+        assert!(enqueue_unique(&mut pending, &inflight, id));
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn enqueue_unique_skips_when_already_pending() {
+        let id = MediaFileId::new();
+        let mut pending = VecDeque::from([id]);
+        let inflight = HashSet::new();
+
+        assert!(!enqueue_unique(&mut pending, &inflight, id));
+        assert_eq!(pending.len(), 1, "must not duplicate a queued file");
+    }
+
+    #[test]
+    fn enqueue_unique_skips_when_inflight() {
+        let id = MediaFileId::new();
+        let mut pending = VecDeque::new();
+        let inflight = HashSet::from([id]);
+
+        assert!(!enqueue_unique(&mut pending, &inflight, id));
+        assert!(pending.is_empty(), "must not re-queue a running encode");
+    }
 
     fn ffmpeg_available() -> bool {
         std::process::Command::new("ffmpeg")
