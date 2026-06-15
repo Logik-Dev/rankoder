@@ -65,6 +65,12 @@
             commonArgs
             // {
               inherit cargoArtifacts;
+              # The integration tests need a live PostgreSQL + ffmpeg, neither of
+              # which exists in the hermetic build sandbox (they skip at runtime
+              # but still have to compile, which would require offline data for
+              # every test-only query). Tests are a dev-time concern: run them
+              # with `cargo test` against the devenv database, not in the build.
+              doCheck = false;
               nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
               # ffprobe/ffmpeg are runtime dependencies shelled out to at run time.
               postInstall = ''
