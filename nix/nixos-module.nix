@@ -1,0 +1,264 @@
+self:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  cfg = config.services.rankoder;
+in
+{
+  options.services.rankoder = {
+    enable = lib.mkEnableOption "rankoder HEVC re-encoding service";
+
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      defaultText = lib.literalExpression "rankoder.packages.\${system}.default";
+      description = "The rankoder package to run.";
+    };
+
+    user = lib.mkOption {
+      type = lib.types.str;
+      default = "rankoder";
+      description = ''
+        System user the service runs as. Also the PostgreSQL role used for
+        Unix-socket peer authentication, so it must match a role that owns the
+        database (see {option}`services.rankoder.database.provision`).
+      '';
+    };
+
+    group = lib.mkOption {
+      type = lib.types.str;
+      default = "rankoder";
+      description = "System group the service runs as.";
+    };
+
+    environmentFile = lib.mkOption {
+      type = lib.types.path;
+      example = "/run/secrets/rankoder.env";
+      description = ''
+        Path to an environment file (kept out of the Nix store) holding the
+        secrets as `KEY=VALUE` lines. Required: `JELLYFIN_API_KEY`. Optional:
+        `RADARR_API_KEY`, `SONARR_API_KEY`, plus any MQTT credentials. Works
+        with sops-nix / agenix by pointing at the decrypted file.
+      '';
+    };
+
+    jellyfinUrl = lib.mkOption {
+      type = lib.types.str;
+      example = "https://jellyfin.example.com";
+      description = "Base URL of the Jellyfin server (JELLYFIN_URL).";
+    };
+
+    mqtt = {
+      host = lib.mkOption {
+        type = lib.types.str;
+        default = "localhost";
+        description = "MQTT broker host (Home Assistant) for approval messages.";
+      };
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 1883;
+        description = "MQTT broker port.";
+      };
+    };
+
+    radarrUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "https://radarr.example.com";
+      description = ''
+        Radarr base URL. When set (with `RADARR_API_KEY` in the environment
+        file), a completed movie transcode triggers a Radarr RescanMovie.
+      '';
+    };
+
+    sonarrUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "https://sonarr.example.com";
+      description = ''
+        Sonarr base URL. When set (with `SONARR_API_KEY` in the environment
+        file), a completed episode transcode triggers a Sonarr RescanSeries.
+      '';
+    };
+
+    database = {
+      url = lib.mkOption {
+        type = lib.types.str;
+        default = "postgresql:///rankoder?host=/run/postgresql";
+        description = ''
+          DATABASE_URL passed to the app. The default connects to the local
+          shared PostgreSQL over its Unix socket using peer authentication.
+        '';
+      };
+      name = lib.mkOption {
+        type = lib.types.str;
+        default = "rankoder";
+        description = "Database name to provision when {option}`provision` is true.";
+      };
+      provision = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Add the database and a peer-authenticated role (named after
+          {option}`user`) to the host's PostgreSQL via
+          `services.postgresql.ensureDatabases`/`ensureUsers`. Assumes
+          PostgreSQL is already enabled on this host. The schema itself is
+          created at first start by the app's migrations
+          (see {option}`autoMigrate`).
+        '';
+      };
+    };
+
+    tmpDir = lib.mkOption {
+      type = lib.types.str;
+      example = "/srv/media/.rankoder-tmp";
+      description = ''
+        Scratch directory for in-progress encodes (TRANSCODE_TMP_DIR). Should
+        be on the same filesystem as the library for atomic moves.
+      '';
+    };
+
+    retentionDir = lib.mkOption {
+      type = lib.types.str;
+      example = "/srv/rankoder-retention";
+      description = ''
+        Directory where originals are moved after a successful transcode
+        (TRANSCODE_RETENTION_DIR). Must live OUTSIDE the Radarr/Sonarr library
+        folders, otherwise the rescan re-imports the moved original.
+      '';
+    };
+
+    retentionDays = lib.mkOption {
+      type = lib.types.int;
+      default = 7;
+      description = "Days to keep originals before the reaper deletes them.";
+    };
+
+    autoMigrate = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Run database migrations automatically at startup (AUTO_MIGRATE).";
+    };
+
+    logLevel = lib.mkOption {
+      type = lib.types.str;
+      default = "info";
+      description = "Value for RUST_LOG / the tracing EnvFilter.";
+    };
+
+    hardwareAcceleration = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Grant the service access to `/dev/dri` (and the video/render groups) for
+        VAAPI/QSV hardware HEVC encoding. Leave off for software-only encoding.
+      '';
+    };
+
+    settings = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = lib.literalExpression ''{ MIN_ANALYSIS_BPP = "0.05"; }'';
+      description = "Extra environment variables, merged last (can override the above).";
+    };
+  };
+
+  config = lib.mkIf cfg.enable {
+    users.users = lib.mkIf (cfg.user == "rankoder") {
+      rankoder = {
+        isSystemUser = true;
+        group = cfg.group;
+        description = "rankoder service user";
+      };
+    };
+
+    users.groups = lib.mkIf (cfg.group == "rankoder") {
+      rankoder = { };
+    };
+
+    services.postgresql = lib.mkIf cfg.database.provision {
+      ensureDatabases = [ cfg.database.name ];
+      ensureUsers = [
+        {
+          name = cfg.user;
+          ensureDBOwnership = true;
+        }
+      ];
+    };
+
+    systemd.tmpfiles.rules = [
+      "d ${cfg.tmpDir} 0750 ${cfg.user} ${cfg.group} - -"
+      "d ${cfg.retentionDir} 0750 ${cfg.user} ${cfg.group} - -"
+    ];
+
+    systemd.services.rankoder = {
+      description = "rankoder HEVC re-encoder";
+      wantedBy = [ "multi-user.target" ];
+      # Ordering only: a non-existent postgresql.service (remote DB) is ignored.
+      after = [
+        "network-online.target"
+        "postgresql.service"
+      ];
+      wants = [ "network-online.target" ];
+
+      environment = {
+        DATABASE_URL = cfg.database.url;
+        AUTO_MIGRATE = if cfg.autoMigrate then "1" else "0";
+        JELLYFIN_URL = cfg.jellyfinUrl;
+        MQTT_HOST = cfg.mqtt.host;
+        MQTT_PORT = toString cfg.mqtt.port;
+        TRANSCODE_TMP_DIR = cfg.tmpDir;
+        TRANSCODE_RETENTION_DIR = cfg.retentionDir;
+        TRANSCODE_RETENTION_DAYS = toString cfg.retentionDays;
+        RUST_LOG = cfg.logLevel;
+      }
+      // lib.optionalAttrs (cfg.radarrUrl != null) { RADARR_URL = cfg.radarrUrl; }
+      // lib.optionalAttrs (cfg.sonarrUrl != null) { SONARR_URL = cfg.sonarrUrl; }
+      // cfg.settings;
+
+      serviceConfig = {
+        ExecStart = lib.getExe cfg.package;
+        User = cfg.user;
+        Group = cfg.group;
+        EnvironmentFile = cfg.environmentFile;
+
+        # /var/lib/rankoder; also the WorkingDirectory so the app's relative
+        # `logs/` directory lands there.
+        StateDirectory = "rankoder";
+        StateDirectoryMode = "0750";
+        WorkingDirectory = "/var/lib/rankoder";
+
+        Restart = "on-failure";
+        RestartSec = 10;
+
+        # Hardening.
+        NoNewPrivileges = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectControlGroups = true;
+        RestrictNamespaces = true;
+        RestrictRealtime = true;
+        LockPersonality = true;
+        ReadWritePaths = [
+          cfg.tmpDir
+          cfg.retentionDir
+        ];
+      }
+      // lib.optionalAttrs cfg.hardwareAcceleration {
+        PrivateDevices = false;
+        DeviceAllow = [ "/dev/dri rw" ];
+        SupplementaryGroups = [
+          "video"
+          "render"
+        ];
+      };
+    };
+  };
+}
