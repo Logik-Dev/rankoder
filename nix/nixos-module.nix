@@ -88,15 +88,16 @@ in
     database = {
       url = lib.mkOption {
         type = lib.types.str;
-        default = "postgresql://${cfg.user}@/${cfg.database.name}?host=/run/postgresql";
+        default = "postgresql://${cfg.user}@localhost/${cfg.database.name}?host=/run/postgresql";
         defaultText = lib.literalExpression
-          ''"postgresql://''${user}@/''${database.name}?host=/run/postgresql"'';
+          ''"postgresql://''${user}@localhost/''${database.name}?host=/run/postgresql"'';
         description = ''
-          DATABASE_URL passed to the app. The default connects to the local
-          shared PostgreSQL over its Unix socket. The username is set explicitly
-          (to {option}`user`) so Unix-socket peer authentication maps it to the
-          role of the same name — without it, the client sends no username and
-          peer auth fails.
+          DATABASE_URL passed to the app. Connects to the local shared
+          PostgreSQL over its Unix socket: the `host=` query parameter points at
+          the socket directory (sqlx uses it because it starts with `/`), while
+          the `localhost` authority is only a placeholder — sqlx rejects an empty
+          host. The username is set explicitly (to {option}`user`) so peer
+          authentication maps it to the role of the same name.
         '';
       };
       name = lib.mkOption {
