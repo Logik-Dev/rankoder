@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT color_primaries, color_trc, colorspace, master_display, max_cll\n                FROM video_color_metadata\n                WHERE media_file_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "color_primaries",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "video_color_metadata",
+            "name": "color_primaries"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "color_trc",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "video_color_metadata",
+            "name": "color_trc"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "colorspace",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "video_color_metadata",
+            "name": "colorspace"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "master_display",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "video_color_metadata",
+            "name": "master_display"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "max_cll",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "video_color_metadata",
+            "name": "max_cll"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "a30f40a9e156ab7f7c6773c02aa5d86071643cc942a468af9c43d39128ec757f"
+}

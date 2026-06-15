@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO series_provider_refs (series_id, provider, external_id)\n                   VALUES ($1, $2, $3)\n                   ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "de2a85afc710401f04712d95142a9d5c4a5f81ee985ec8def482e1c24b225278"
+}

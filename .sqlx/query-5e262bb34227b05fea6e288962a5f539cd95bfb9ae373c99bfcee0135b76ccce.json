@@ -1,0 +1,49 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                        UPDATE media_files\n                        SET workflow_state = $1, transcode_spec = $2\n                        WHERE id = $3 AND workflow_state = $4\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "workflow_state",
+            "kind": {
+              "Enum": [
+                "discovered",
+                "probed",
+                "analyzed",
+                "pending_approval",
+                "transcoding",
+                "done",
+                "skipped",
+                "failed"
+              ]
+            }
+          }
+        },
+        "Jsonb",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "workflow_state",
+            "kind": {
+              "Enum": [
+                "discovered",
+                "probed",
+                "analyzed",
+                "pending_approval",
+                "transcoding",
+                "done",
+                "skipped",
+                "failed"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5e262bb34227b05fea6e288962a5f539cd95bfb9ae373c99bfcee0135b76ccce"
+}

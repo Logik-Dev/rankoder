@@ -84,5 +84,17 @@ in
   git-hooks.hooks = {
     rustfmt.enable = true;
     clippy.enable = true;
+
+    # Fail the commit if the committed .sqlx/ offline data is out of sync with
+    # the queries/migrations. Runs only when .rs or migration files change.
+    # `--check` verifies without rewriting; regenerate with `cargo sqlx prepare`.
+    # Relies on the devenv Postgres + DATABASE_URL being available.
+    sqlx-prepare = {
+      enable = true;
+      name = "sqlx prepare check";
+      entry = "cargo sqlx prepare --check";
+      files = "(\\.rs$|^migrations/.*\\.sql$)";
+      pass_filenames = false;
+    };
   };
 }

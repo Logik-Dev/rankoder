@@ -1,0 +1,51 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT 'season' AS kind, e.series_id, e.season_number AS season, NULL::uuid AS movie_id,\n                   MIN(mf.updated_at) AS oldest\n            FROM media_files mf JOIN episodes e ON mf.episode_id = e.id\n            GROUP BY e.series_id, e.season_number\n            HAVING bool_or(mf.workflow_state = 'analyzed')\n               AND NOT bool_or(mf.workflow_state IN ('discovered','probed','pending_approval'))\n            UNION ALL\n            SELECT 'movie', NULL::uuid, NULL::smallint, mf.movie_id, mf.updated_at\n            FROM media_files mf\n            WHERE mf.movie_id IS NOT NULL AND mf.workflow_state = 'analyzed'\n            ORDER BY oldest ASC\n            LIMIT $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "series_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "season",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "movie_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "oldest",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "99afdda1143d1ecc8e80afbbe11626c7c8f75f8114df1f2e64f4fc6a26ab8e62"
+}

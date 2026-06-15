@@ -1,0 +1,188 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT id, episode_id, movie_id, file_path, size_bytes, video_codec, height,\n                width, bitrate_kbps, framerate, duration_seconds, transcode_spec,\n                workflow_state as \"workflow_state: WorkflowStateTag\"\n                FROM media_files\n                WHERE id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "episode_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "episode_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "movie_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "movie_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "file_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "file_path"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "size_bytes",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "size_bytes"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "video_codec",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "video_codec"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "height",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "height"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "width",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "width"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "bitrate_kbps",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "bitrate_kbps"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "framerate",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "framerate"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "duration_seconds",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "duration_seconds"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "transcode_spec",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "transcode_spec"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "workflow_state: WorkflowStateTag",
+        "type_info": {
+          "Custom": {
+            "name": "workflow_state",
+            "kind": {
+              "Enum": [
+                "discovered",
+                "probed",
+                "analyzed",
+                "pending_approval",
+                "transcoding",
+                "done",
+                "skipped",
+                "failed"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "workflow_state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "f0cc04f9da621e2a2df9849e82ed20f800e10fe331d3216fe5072dd94776327d"
+}

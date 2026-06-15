@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO series (id, title, tmdb_id, tvdb_id, rating)\n           VALUES ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4",
+        "Int4",
+        "Float4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7d669bd03d74e86ecab2515f6ff0554d52b4a995435d9941dae0dbabe8ee14dc"
+}

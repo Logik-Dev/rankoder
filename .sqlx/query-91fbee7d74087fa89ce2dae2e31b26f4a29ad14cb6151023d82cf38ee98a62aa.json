@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO movie_provider_refs (movie_id, provider, external_id)\n                   VALUES ($1, $2, $3)\n                   ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "91fbee7d74087fa89ce2dae2e31b26f4a29ad14cb6151023d82cf38ee98a62aa"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO retention_files (media_file_id, retained_path, original_size_bytes)\n                VALUES ($1, $2, $3)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "857743597e87e35f16b4c7dd4c8ba44ce7f85c21e50b8c9b44ddec882cee7b0c"
+}

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    INSERT INTO video_color_metadata\n                        (media_file_id, color_primaries, color_trc, colorspace, master_display, max_cll)\n                    VALUES ($1, $2, $3, $4, $5, $6)\n                    ON CONFLICT (media_file_id) DO UPDATE SET\n                        color_primaries = EXCLUDED.color_primaries,\n                        color_trc = EXCLUDED.color_trc,\n                        colorspace = EXCLUDED.colorspace,\n                        master_display = EXCLUDED.master_display,\n                        max_cll = EXCLUDED.max_cll\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9ed7b5ee0c9ce0512ef90e0fcb9e407dee7920af26149d2096cfbf406b3b55b9"
+}

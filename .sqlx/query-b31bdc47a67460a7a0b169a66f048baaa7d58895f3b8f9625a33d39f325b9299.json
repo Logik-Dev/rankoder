@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT s.tvdb_id\n                FROM media_files mf\n                JOIN episodes e ON mf.episode_id = e.id\n                JOIN series   s ON e.series_id   = s.id\n                WHERE mf.id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tvdb_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "series",
+            "name": "tvdb_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "b31bdc47a67460a7a0b169a66f048baaa7d58895f3b8f9625a33d39f325b9299"
+}

@@ -1,0 +1,61 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                    SELECT m.title, m.rating,\n                           COUNT(*)::bigint AS file_count,\n                           SUM(mf.size_bytes)::bigint AS total_size_bytes,\n                           SUM(mf.size_bytes * LEAST(GREATEST(COALESCE((mf.transcode_spec->>'compression_potential')::float8, 0), 0), 1))::bigint AS saved_bytes\n                    FROM media_files mf\n                    JOIN movies m ON mf.movie_id = m.id\n                    WHERE mf.movie_id = $1\n                      AND mf.workflow_state = 'pending_approval'\n                    GROUP BY m.title, m.rating\n                    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "movies",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "rating",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "movies",
+            "name": "rating"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "file_count",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_size_bytes",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "saved_bytes",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "a135bbf22866310ad7d9ff31992e8cceb144267a3ee048e785280018ce185867"
+}

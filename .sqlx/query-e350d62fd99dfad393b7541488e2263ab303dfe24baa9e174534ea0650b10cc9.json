@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: EpisodeId\"\n           FROM episodes\n           WHERE series_id = $1 AND season_number = $2 AND episode_number = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: EpisodeId",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "episodes",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int2",
+        "Int2"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e350d62fd99dfad393b7541488e2263ab303dfe24baa9e174534ea0650b10cc9"
+}

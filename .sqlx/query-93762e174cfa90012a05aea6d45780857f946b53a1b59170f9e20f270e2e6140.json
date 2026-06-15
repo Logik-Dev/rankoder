@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE media_files\n                SET size_bytes = $1, video_codec = $2, height = $3, width = $4,\n                    bitrate_kbps = $5, framerate = $6, duration_seconds = $7, workflow_state = $8\n                WHERE id = $9 AND workflow_state = $10\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int4",
+        "Int4",
+        "Int4",
+        "Text",
+        "Float8",
+        {
+          "Custom": {
+            "name": "workflow_state",
+            "kind": {
+              "Enum": [
+                "discovered",
+                "probed",
+                "analyzed",
+                "pending_approval",
+                "transcoding",
+                "done",
+                "skipped",
+                "failed"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        {
+          "Custom": {
+            "name": "workflow_state",
+            "kind": {
+              "Enum": [
+                "discovered",
+                "probed",
+                "analyzed",
+                "pending_approval",
+                "transcoding",
+                "done",
+                "skipped",
+                "failed"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "93762e174cfa90012a05aea6d45780857f946b53a1b59170f9e20f270e2e6140"
+}

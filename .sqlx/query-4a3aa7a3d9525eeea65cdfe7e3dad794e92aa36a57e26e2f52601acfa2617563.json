@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM media_files WHERE workflow_state = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "workflow_state",
+            "kind": {
+              "Enum": [
+                "discovered",
+                "probed",
+                "analyzed",
+                "pending_approval",
+                "transcoding",
+                "done",
+                "skipped",
+                "failed"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4a3aa7a3d9525eeea65cdfe7e3dad794e92aa36a57e26e2f52601acfa2617563"
+}

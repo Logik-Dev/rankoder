@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO events(media_file_id, event)\n            SELECT unnest($1::uuid[]), $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dbcaf47c888b802f483ce06a646649c41c205b56ea9112751b75df24abcf9b3d"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT movie_id AS \"movie_id: MovieId\"\n           FROM movie_provider_refs\n           WHERE provider = $1 AND external_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "movie_id: MovieId",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "movie_provider_refs",
+            "name": "movie_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0319ef6ad86bba9b26f3b242e3b1737884951a10a35ab5b1ce2be023debcf9dc"
+}

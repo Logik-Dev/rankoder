@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n              INSERT INTO events(media_file_id, event) VALUES($1, $2)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3136a92837c5618f829c7668c34e7ebacc5853674d6db285e3cf17ac610aa892"
+}
