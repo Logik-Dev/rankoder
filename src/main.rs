@@ -15,7 +15,7 @@ use crate::{
     models::workflow::WorkflowStateTag,
     notification::mqtt::MqttNotifier,
     probe::FFmpeg,
-    providers::JellyfinProvider,
+    providers::{JellyfinProvider, MediaServerNotifier, RadarrClient},
     store::MediaStore,
     sync::SyncOrchestrator,
     transcode::orchestrator::TranscodeOrchestrator,
@@ -117,6 +117,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encoder = transcode::detect::detect_encoder(override_enc).await?;
     info!(?encoder, "HEVC encoder selected");
 
+    // Optional: refresh Radarr after each transcode so it picks up the new
+    // file. Disabled (no-op) unless both URL and API key are configured.
+    let media_notifier: Option<Arc<dyn MediaServerNotifier>> =
+        match (&cfg.radarr_url, &cfg.radarr_api_key) {
+            (Some(url), Some(api_key)) => {
+                info!("Radarr notifier enabled");
+                Some(Arc::new(RadarrClient::new(url, api_key)?))
+            }
+            _ => {
+                info!("Radarr not configured, skipping media-manager refresh");
+                None
+            }
+        };
+
     let transcode_orchestrator = TranscodeOrchestrator::new(
         rx_t,
         store.clone(),
@@ -124,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.transcode_tmp_dir.into(),
         cfg.transcode_retention_dir.into(),
         cfg.transcode_min_size_reduction,
+        media_notifier,
     );
 
     // Recovery: re-enqueue files stuck in Transcoding state

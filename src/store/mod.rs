@@ -218,6 +218,29 @@ impl MediaStore {
         Ok(row.rating)
     }
 
+    /// TMDB id of the movie a media file belongs to, used to ask the downstream
+    /// media manager (Radarr) to rescan it after transcoding. Returns `None`
+    /// when the file is an episode (Sonarr's responsibility) or the movie has
+    /// no TMDB id — in both cases there is nothing to ask Radarr to refresh.
+    pub async fn tmdb_id_for_movie_file(
+        &self,
+        media_file_id: &MediaFileId,
+    ) -> Result<Option<i32>, StoreError> {
+        let row = sqlx::query!(
+            r#"
+                SELECT m.tmdb_id
+                FROM media_files mf
+                JOIN movies m ON mf.movie_id = m.id
+                WHERE mf.id = $1
+            "#,
+            media_file_id.as_uuid(),
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.and_then(|r| r.tmdb_id))
+    }
+
     pub async fn fetch_active_media_files(&self) -> Result<Vec<MediaFileId>, StoreError> {
         let rows = sqlx::query!(
             r#"SELECT id FROM media_files WHERE workflow_state NOT IN ('done', 'skipped', 'failed')"#

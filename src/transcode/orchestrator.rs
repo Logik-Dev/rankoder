@@ -14,6 +14,7 @@ use crate::{
         transcode::SkipReason,
         workflow::WorkflowStateTag,
     },
+    providers::MediaServerNotifier,
     store::MediaStore,
     transcode::{
         encoder::Encoder,
@@ -32,6 +33,7 @@ pub struct TranscodeOrchestrator {
     tmp_dir: PathBuf,
     retention_dir: PathBuf,
     min_size_reduction: f64,
+    notifier: Option<Arc<dyn MediaServerNotifier>>,
 }
 
 impl TranscodeOrchestrator {
@@ -42,6 +44,7 @@ impl TranscodeOrchestrator {
         tmp_dir: PathBuf,
         retention_dir: PathBuf,
         min_size_reduction: f64,
+        notifier: Option<Arc<dyn MediaServerNotifier>>,
     ) -> Self {
         Self {
             rx,
@@ -50,6 +53,7 @@ impl TranscodeOrchestrator {
             tmp_dir,
             retention_dir,
             min_size_reduction,
+            notifier,
         }
     }
 
@@ -71,6 +75,7 @@ impl TranscodeOrchestrator {
         let tmp_dir = self.tmp_dir;
         let retention_dir = self.retention_dir;
         let min_size_reduction = self.min_size_reduction;
+        let notifier = self.notifier;
         let mut rx = self.rx;
 
         let mut pending = VecDeque::new();
@@ -93,9 +98,11 @@ impl TranscodeOrchestrator {
                     let t = tmp_dir.clone();
                     let r = retention_dir.clone();
                     let msr = min_size_reduction;
+                    let n = notifier.clone();
 
                     join_set.spawn(async move {
-                        if let Err(e) = Self::process_file(s, enc, &t, &r, msr, media_file_id).await
+                        if let Err(e) =
+                            Self::process_file(s, enc, &t, &r, msr, n, media_file_id).await
                         {
                             error!(%e, ?media_file_id, "transcode failed");
                         }
@@ -274,13 +281,14 @@ impl TranscodeOrchestrator {
         }))
     }
 
-    #[instrument(skip(store, tmp_dir, retention_dir), fields(id = ?media_file_id), err)]
+    #[instrument(skip(store, tmp_dir, retention_dir, notifier), fields(id = ?media_file_id), err)]
     async fn process_file(
         store: Arc<MediaStore>,
         encoder: Encoder,
         tmp_dir: &Path,
         retention_dir: &Path,
         min_size_reduction: f64,
+        notifier: Option<Arc<dyn MediaServerNotifier>>,
         media_file_id: MediaFileId,
     ) -> Result<()> {
         let media_file = store.find_media_file_by_id(&media_file_id).await?;
@@ -306,6 +314,10 @@ impl TranscodeOrchestrator {
                     )
                     .await?;
                 info!(?media_file_id, "transcode completed successfully");
+
+                // Best-effort: tell the media manager to pick up the new file.
+                // A failure here must not fail the (already committed) transcode.
+                Self::notify_media_server(&store, notifier.as_deref(), &media_file_id).await;
             }
             Ok(TranscodeOutcome::Skipped(reason)) => {
                 store
@@ -341,6 +353,31 @@ impl TranscodeOrchestrator {
         }
 
         Ok(())
+    }
+
+    /// Ask the media manager (Radarr) to rescan the movie this file belongs to.
+    /// Best-effort and never fails the caller: episodes, movies without a TMDB
+    /// id, and a missing/unconfigured notifier are silently skipped, and a
+    /// failed refresh is only logged.
+    async fn notify_media_server(
+        store: &MediaStore,
+        notifier: Option<&dyn MediaServerNotifier>,
+        media_file_id: &MediaFileId,
+    ) {
+        let Some(notifier) = notifier else { return };
+
+        let tmdb_id = match store.tmdb_id_for_movie_file(media_file_id).await {
+            Ok(Some(id)) => id,
+            Ok(None) => return,
+            Err(e) => {
+                warn!(%e, ?media_file_id, "failed to look up tmdb id for media server refresh");
+                return;
+            }
+        };
+
+        if let Err(e) = notifier.refresh_movie(tmdb_id).await {
+            warn!(%e, tmdb_id, ?media_file_id, "failed to refresh media manager after transcode");
+        }
     }
 }
 
@@ -761,6 +798,7 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.05,
+            None,
             id,
         )
         .await
@@ -802,6 +840,7 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.1,
+            None,
             id,
         )
         .await
@@ -844,6 +883,7 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.05,
+            None,
             id,
         )
         .await
@@ -853,6 +893,85 @@ mod tests {
         assert_eq!(state, WorkflowStateTag::Failed);
         assert_eq!(event_count(&pool, id, "transcode_failed").await, 1);
         assert_eq!(retention_count(&pool, id).await, 0);
+
+        cleanup(&pool, movie_id).await;
+    }
+
+    // ---- Media-manager notification ----------------------------------------
+
+    /// Records the TMDB ids it is asked to refresh, so tests can assert the
+    /// notifier was (or wasn't) invoked.
+    struct RecordingNotifier {
+        calls: std::sync::Mutex<Vec<i32>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MediaServerNotifier for RecordingNotifier {
+        async fn refresh_movie(
+            &self,
+            tmdb_id: i32,
+        ) -> Result<(), crate::providers::ProviderError> {
+            self.calls.lock().unwrap().push(tmdb_id);
+            Ok(())
+        }
+    }
+
+    async fn insert_movie_with_tmdb(pool: &PgPool, tmdb_id: i32) -> Uuid {
+        let id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO movies (id, title, tmdb_id) VALUES ($1, $2, $3)",
+            id,
+            "rankoder notify",
+            tmdb_id,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn notify_refreshes_movie_with_tmdb_id() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+
+        let movie_id = insert_movie_with_tmdb(&pool, 603).await;
+        let id =
+            insert_transcoding_file(&pool, movie_id, Path::new("/tmp/notify.mkv"), 1_000, None).await;
+
+        let notifier = RecordingNotifier {
+            calls: std::sync::Mutex::new(Vec::new()),
+        };
+        TranscodeOrchestrator::notify_media_server(&store, Some(&notifier), &id).await;
+
+        assert_eq!(notifier.calls.lock().unwrap().as_slice(), &[603]);
+
+        cleanup(&pool, movie_id).await;
+    }
+
+    #[tokio::test]
+    async fn notify_skips_movie_without_tmdb_id() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+
+        // insert_movie inserts without a tmdb_id.
+        let movie_id = insert_movie(&pool).await;
+        let id =
+            insert_transcoding_file(&pool, movie_id, Path::new("/tmp/notify2.mkv"), 1_000, None)
+                .await;
+
+        let notifier = RecordingNotifier {
+            calls: std::sync::Mutex::new(Vec::new()),
+        };
+        TranscodeOrchestrator::notify_media_server(&store, Some(&notifier), &id).await;
+
+        assert!(notifier.calls.lock().unwrap().is_empty());
 
         cleanup(&pool, movie_id).await;
     }

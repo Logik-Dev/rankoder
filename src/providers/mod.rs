@@ -1,17 +1,28 @@
 mod error;
 mod jellyfin;
+mod radarr;
 
 use async_trait::async_trait;
 
-use crate::{
-    models::{
-        drafts::{EpisodeDraft, MovieDraft, SeriesDraft},
-        series::SeriesId,
-    },
-    providers::error::ProviderError,
+use crate::models::{
+    drafts::{EpisodeDraft, MovieDraft, SeriesDraft},
+    series::SeriesId,
 };
 
+pub use error::ProviderError;
 pub use jellyfin::JellyfinProvider;
+pub use radarr::RadarrClient;
+
+/// Asks a downstream media manager to refresh its view of a title after the
+/// underlying file changed (transcoded to a new path/codec/size). Implemented
+/// by `RadarrClient`; kept as a trait so the transcode orchestrator can be
+/// tested without a live Radarr and so Sonarr/Jellyfin can be added later.
+#[async_trait]
+pub trait MediaServerNotifier: Send + Sync {
+    /// Rescan the movie identified by its TMDB id so the manager picks up the
+    /// freshly transcoded file instead of stale cached media info.
+    async fn refresh_movie(&self, tmdb_id: i32) -> Result<(), ProviderError>;
+}
 
 pub trait ParentId {
     fn parent_id(&self) -> Option<&str>;
