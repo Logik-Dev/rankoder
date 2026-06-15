@@ -5,10 +5,15 @@ use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use tokio::sync::{Mutex, mpsc};
 use tracing::warn;
 
-use super::{ApprovalNotifier, ApprovalRequest, ApprovalResponse, NotifierError};
+use super::{
+    ApprovalNotifier, ApprovalRequest, ApprovalResponse, FailureAlert, NotifierError,
+    StatusNotifier, StatusSnapshot,
+};
 
 const REQUEST_TOPIC: &str = "rankoder/approval/request";
 const RESPONSE_TOPIC: &str = "rankoder/approval/response";
+const FAILURE_TOPIC: &str = "rankoder/failure";
+const STATUS_TOPIC: &str = "rankoder/status";
 
 pub struct MqttNotifier {
     client: AsyncClient,
@@ -88,5 +93,26 @@ impl ApprovalNotifier for MqttNotifier {
             }
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl StatusNotifier for MqttNotifier {
+    async fn publish_failure(&self, alert: &FailureAlert) -> Result<(), NotifierError> {
+        let payload = serde_json::to_vec(alert)?;
+        self.client
+            .publish(FAILURE_TOPIC, QoS::AtLeastOnce, false, payload)
+            .await
+            .map_err(|e| NotifierError::Client(e.to_string()))
+    }
+
+    async fn publish_status(&self, status: &StatusSnapshot) -> Result<(), NotifierError> {
+        let payload = serde_json::to_vec(status)?;
+        // Retained so the latest pipeline state survives restarts and is
+        // delivered to any subscriber (e.g. Home Assistant) on connect.
+        self.client
+            .publish(STATUS_TOPIC, QoS::AtLeastOnce, true, payload)
+            .await
+            .map_err(|e| NotifierError::Client(e.to_string()))
     }
 }

@@ -33,6 +33,17 @@ pub struct MediaStore {
     pool: PgPool,
 }
 
+/// A `transcode_failed` event joined with the human-readable title of the media
+/// it belongs to, for surfacing failures to the operator.
+#[derive(Debug)]
+pub struct FailureRecord {
+    pub event_id: i64,
+    pub media_file_id: MediaFileId,
+    pub title: Option<String>,
+    pub kind: String,
+    pub error: String,
+}
+
 impl MediaStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -643,6 +654,120 @@ impl MediaStore {
             }
         }
     }
+    /// Count of media files per workflow state, for the status snapshot. States
+    /// with no files are simply absent from the result.
+    pub async fn fetch_state_counts(&self) -> Result<Vec<(WorkflowStateTag, i64)>, StoreError> {
+        let rows = sqlx::query!(
+            r#"SELECT workflow_state AS "state: WorkflowStateTag", COUNT(*) AS "count!"
+               FROM media_files GROUP BY workflow_state"#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| (r.state, r.count)).collect())
+    }
+
+    /// Total bytes saved across all completed transcodes, summed from the
+    /// `transcoded` events (which survive retention reaping, unlike the
+    /// originals themselves).
+    pub async fn fetch_total_space_saved_bytes(&self) -> Result<i64, StoreError> {
+        let row = sqlx::query!(
+            r#"
+            SELECT COALESCE(
+                       SUM((event->>'original_size')::bigint - (event->>'new_size')::bigint),
+                       0
+                   )::bigint AS "saved!"
+            FROM events
+            WHERE event->>'type' = 'transcoded'
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row.saved)
+    }
+
+    /// The highest event id currently present, used to seed the failure
+    /// high-water mark so a restart doesn't replay historical failures.
+    pub async fn fetch_max_event_id(&self) -> Result<i64, StoreError> {
+        let row = sqlx::query!(r#"SELECT COALESCE(MAX(id), 0) AS "max!" FROM events"#)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(row.max)
+    }
+
+    /// New `transcode_failed` events with id greater than `after_id`, oldest
+    /// first, joined with the owning movie/series title.
+    pub async fn fetch_failures_after(
+        &self,
+        after_id: i64,
+    ) -> Result<Vec<FailureRecord>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT e.id                                            AS "event_id!",
+                   e.media_file_id                                 AS "media_file_id!",
+                   e.event->>'error'                               AS error,
+                   COALESCE(m.title, s.title)                      AS title,
+                   CASE WHEN mf.movie_id IS NOT NULL
+                        THEN 'movie' ELSE 'episode' END            AS "kind!"
+            FROM events e
+            JOIN media_files mf ON mf.id = e.media_file_id
+            LEFT JOIN movies m   ON mf.movie_id = m.id
+            LEFT JOIN episodes ep ON mf.episode_id = ep.id
+            LEFT JOIN series s    ON ep.series_id = s.id
+            WHERE e.id > $1 AND e.event->>'type' = 'transcode_failed'
+            ORDER BY e.id
+            "#,
+            after_id,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| FailureRecord {
+                event_id: r.event_id,
+                media_file_id: MediaFileId::from(r.media_file_id),
+                title: r.title,
+                kind: r.kind,
+                error: r.error.unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    /// The most recent `transcode_failed` event, for the status snapshot.
+    pub async fn fetch_last_failure(&self) -> Result<Option<FailureRecord>, StoreError> {
+        let row = sqlx::query!(
+            r#"
+            SELECT e.id                                            AS "event_id!",
+                   e.media_file_id                                 AS "media_file_id!",
+                   e.event->>'error'                               AS error,
+                   COALESCE(m.title, s.title)                      AS title,
+                   CASE WHEN mf.movie_id IS NOT NULL
+                        THEN 'movie' ELSE 'episode' END            AS "kind!"
+            FROM events e
+            JOIN media_files mf ON mf.id = e.media_file_id
+            LEFT JOIN movies m   ON mf.movie_id = m.id
+            LEFT JOIN episodes ep ON mf.episode_id = ep.id
+            LEFT JOIN series s    ON ep.series_id = s.id
+            WHERE e.event->>'type' = 'transcode_failed'
+            ORDER BY e.id DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| FailureRecord {
+            event_id: r.event_id,
+            media_file_id: MediaFileId::from(r.media_file_id),
+            title: r.title,
+            kind: r.kind,
+            error: r.error.unwrap_or_default(),
+        }))
+    }
+
     pub async fn fetch_files_in_state(
         &self,
         state: WorkflowStateTag,
@@ -894,5 +1019,103 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+    }
+
+    fn failed_count(counts: &[(WorkflowStateTag, i64)]) -> i64 {
+        counts
+            .iter()
+            .find(|(s, _)| *s == WorkflowStateTag::Failed)
+            .map(|(_, c)| *c)
+            .unwrap_or(0)
+    }
+
+    async fn insert_movie_titled(pool: &PgPool, title: &str, state: WorkflowStateTag) -> (Uuid, Uuid) {
+        let movie_id = Uuid::now_v7();
+        sqlx::query!("INSERT INTO movies (id, title) VALUES ($1, $2)", movie_id, title)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        let file_id = Uuid::now_v7();
+        sqlx::query!(
+            r#"INSERT INTO media_files (id, movie_id, file_path, workflow_state)
+               VALUES ($1, $2, $3, $4)"#,
+            file_id,
+            movie_id,
+            format!("/tmp/status_{file_id}.mkv"),
+            state as WorkflowStateTag,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        (movie_id, file_id)
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn status_queries_surface_failures_and_savings() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+
+        let max_before = store.fetch_max_event_id().await.unwrap();
+        let saved_before = store.fetch_total_space_saved_bytes().await.unwrap();
+        let failed_before = failed_count(&store.fetch_state_counts().await.unwrap());
+
+        // A failed movie with a transcode_failed event.
+        let (fail_movie, fail_file) =
+            insert_movie_titled(&pool, "Inception fail", WorkflowStateTag::Failed).await;
+        sqlx::query!(
+            r#"INSERT INTO events (media_file_id, event) VALUES ($1, $2)"#,
+            fail_file,
+            serde_json::json!({ "type": "transcode_failed", "error": "ffmpeg boom" }),
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // A completed movie whose transcoded event records a 3 GB-ish saving.
+        let (done_movie, done_file) =
+            insert_movie_titled(&pool, "Saver", WorkflowStateTag::Done).await;
+        sqlx::query!(
+            r#"INSERT INTO events (media_file_id, event) VALUES ($1, $2)"#,
+            done_file,
+            serde_json::json!({ "type": "transcoded", "original_size": 5_000_000, "new_size": 2_000_000 }),
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // New failures since the high-water mark include ours, with title + kind.
+        let new_failures = store.fetch_failures_after(max_before).await.unwrap();
+        let ours = new_failures
+            .iter()
+            .find(|f| f.media_file_id.as_uuid() == fail_file)
+            .expect("our failure should be returned");
+        assert_eq!(ours.kind, "movie");
+        assert_eq!(ours.title.as_deref(), Some("Inception fail"));
+        assert_eq!(ours.error, "ffmpeg boom");
+
+        // Most recent failure is the one we just inserted (#[serial]).
+        let last = store.fetch_last_failure().await.unwrap().unwrap();
+        assert_eq!(last.media_file_id.as_uuid(), fail_file);
+
+        // Savings delta isolates our transcoded event.
+        let saved_after = store.fetch_total_space_saved_bytes().await.unwrap();
+        assert_eq!(saved_after - saved_before, 3_000_000);
+
+        // The failed count grew by exactly one.
+        let failed_after = failed_count(&store.fetch_state_counts().await.unwrap());
+        assert_eq!(failed_after - failed_before, 1);
+
+        for id in [fail_movie, done_movie] {
+            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
     }
 }

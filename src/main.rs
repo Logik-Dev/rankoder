@@ -13,7 +13,7 @@ use crate::{
     config::AppConfig,
     listener::PostgresListener,
     models::workflow::WorkflowStateTag,
-    notification::mqtt::MqttNotifier,
+    notification::{StatusNotifier, mqtt::MqttNotifier, reporter::StatusReporter},
     probe::FFmpeg,
     providers::{JellyfinProvider, MovieNotifier, RadarrClient, SeriesNotifier, SonarrClient},
     store::MediaStore,
@@ -78,6 +78,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.mqtt_port,
         &cfg.mqtt_client_id,
     ));
+    // The same MQTT notifier also drives operator-facing status/failure topics.
+    let status_notifier: Arc<dyn StatusNotifier> = notifier.clone();
     let approval_orchestrator = Arc::new(ApprovalOrchestrator::new(store.clone(), notifier));
 
     let workflow_orchestrator = WorkflowOrchestrator::new(
@@ -190,6 +192,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let reaper = RetentionReaper::new(store.clone(), cfg.transcode_retention_days);
     join_set.spawn(reaper.run(token.child_token()));
+
+    let status_reporter = StatusReporter::new(store.clone(), status_notifier);
+    join_set.spawn(status_reporter.run(token.child_token()));
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {

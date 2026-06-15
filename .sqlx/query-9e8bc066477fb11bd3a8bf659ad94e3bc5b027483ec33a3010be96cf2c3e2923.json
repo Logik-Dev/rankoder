@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE(\n                       SUM((event->>'original_size')::bigint - (event->>'new_size')::bigint),\n                       0\n                   )::bigint AS \"saved!\"\n            FROM events\n            WHERE event->>'type' = 'transcoded'\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "saved!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9e8bc066477fb11bd3a8bf659ad94e3bc5b027483ec33a3010be96cf2c3e2923"
+}

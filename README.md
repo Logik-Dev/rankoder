@@ -33,6 +33,142 @@ discovered → probed → analyzed → pending_approval → transcoding → done
                                                                  → failed
 ```
 
+## Monitoring (MQTT / Home Assistant)
+
+Everything operator-facing goes through one MQTT connection, under `rankoder/`:
+
+| Topic | Dir | QoS | Retained | Payload |
+| --- | --- | --- | --- | --- |
+| `rankoder/approval/request` | out | 1 | no | `{ batch_id, title, file_count, total_size_gb, total_space_saved_gb, tmdb_rating }` |
+| `rankoder/approval/response` | in | 1 | no | `{ batch_id, approved }` |
+| `rankoder/failure` | out | 1 | no | `{ media_file_id, kind, title, reason }` |
+| `rankoder/status` | out | 1 | **yes** | `{ discovered, probed, analyzed, pending_approval, transcoding, done, skipped, failed, space_saved_gb, last_failure }` |
+
+`rankoder/status` is retained and republished every 60s, so a fresh subscriber
+(e.g. Home Assistant restarting) immediately gets the current state.
+`rankoder/failure` fires once per failure; on a rankoder restart, past failures
+are **not** re-sent (they remain visible in the status counts).
+
+The snippets below assume the [MQTT integration](https://www.home-assistant.io/integrations/mqtt/)
+is configured and use the modern (`triggers`/`actions`) automation syntax.
+Replace `mobile_app_your_phone` with your `notify` service.
+
+### Status sensors
+
+```yaml
+# configuration.yaml
+mqtt:
+  sensor:
+    - name: "rankoder done"
+      unique_id: rankoder_done
+      state_topic: "rankoder/status"
+      value_template: "{{ value_json.done }}"
+      icon: mdi:check-circle
+    - name: "rankoder failed"
+      unique_id: rankoder_failed
+      state_topic: "rankoder/status"
+      value_template: "{{ value_json.failed }}"
+      icon: mdi:alert-circle
+    - name: "rankoder transcoding"
+      unique_id: rankoder_transcoding
+      state_topic: "rankoder/status"
+      value_template: "{{ value_json.transcoding }}"
+      icon: mdi:cog
+    - name: "rankoder pending approval"
+      unique_id: rankoder_pending_approval
+      state_topic: "rankoder/status"
+      value_template: "{{ value_json.pending_approval }}"
+      icon: mdi:account-clock
+    - name: "rankoder skipped"
+      unique_id: rankoder_skipped
+      state_topic: "rankoder/status"
+      value_template: "{{ value_json.skipped }}"
+      icon: mdi:debug-step-over
+    - name: "rankoder space saved"
+      unique_id: rankoder_space_saved
+      state_topic: "rankoder/status"
+      value_template: "{{ value_json.space_saved_gb | round(1) }}"
+      unit_of_measurement: "GB"
+      device_class: data_size
+      state_class: total_increasing
+    - name: "rankoder last failure"
+      unique_id: rankoder_last_failure
+      state_topic: "rankoder/status"
+      value_template: >-
+        {{ value_json.last_failure.title if value_json.last_failure
+           else 'none' }}
+      json_attributes_topic: "rankoder/status"
+      json_attributes_template: "{{ value_json.last_failure | tojson }}"
+```
+
+### Failure alerts
+
+```yaml
+# automations.yaml
+- alias: "rankoder — transcode failure alert"
+  mode: queued
+  triggers:
+    - trigger: mqtt
+      topic: "rankoder/failure"
+  actions:
+    - action: notify.mobile_app_your_phone
+      data:
+        title: "rankoder: transcode failed"
+        message: >-
+          {{ trigger.payload_json.title or trigger.payload_json.media_file_id }}
+          ({{ trigger.payload_json.kind }}) — {{ trigger.payload_json.reason }}
+```
+
+### Approval (actionable notification)
+
+A request triggers a notification with Approve/Reject buttons; tapping one
+publishes the response back to rankoder. The batch id is carried in the action
+string and reconstructed on the way back (robust even if it contains
+underscores).
+
+```yaml
+# automations.yaml
+- alias: "rankoder — approval request"
+  mode: queued
+  triggers:
+    - trigger: mqtt
+      topic: "rankoder/approval/request"
+  actions:
+    - action: notify.mobile_app_your_phone
+      data:
+        title: "rankoder: approve transcode?"
+        message: >-
+          {{ trigger.payload_json.title }} —
+          {{ trigger.payload_json.file_count }} file(s),
+          {{ trigger.payload_json.total_size_gb | round(1) }} GB,
+          ~{{ trigger.payload_json.total_space_saved_gb | round(1) }} GB saved
+        data:
+          actions:
+            - action: "RANKODER_APPROVE_{{ trigger.payload_json.batch_id }}"
+              title: "Approve"
+            - action: "RANKODER_REJECT_{{ trigger.payload_json.batch_id }}"
+              title: "Reject"
+
+- alias: "rankoder — approval response"
+  mode: queued
+  triggers:
+    - trigger: event
+      event_type: mobile_app_notification_action
+  conditions:
+    - condition: template
+      value_template: "{{ trigger.event.data.action.startswith('RANKODER_') }}"
+  actions:
+    - variables:
+        parts: "{{ trigger.event.data.action.split('_') }}"
+        # parts[0]=RANKODER, parts[1]=APPROVE|REJECT, parts[2:]=batch_id
+        approved: "{{ parts[1] == 'APPROVE' }}"
+        batch_id: "{{ parts[2:] | join('_') }}"
+    - action: mqtt.publish
+      data:
+        topic: "rankoder/approval/response"
+        payload: "{{ {'batch_id': batch_id, 'approved': approved} | to_json }}"
+```
+
 ## Development
 
 Uses **devenv** (not raw flakes) for the dev shell:
