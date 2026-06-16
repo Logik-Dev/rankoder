@@ -20,13 +20,16 @@ pub(crate) async fn upsert_movie_file(
     let file_path = draft.media_file.path.as_ref().to_string_lossy();
 
     let row = sqlx::query!(
+        // size_bytes is owned by the probe step after discovery; do NOT
+        // overwrite it on resync. The Jellyfin draft doesn't carry a size, so
+        // EXCLUDED.size_bytes is NULL and would wipe the ffprobe value, leaving
+        // the row in an advanced state with no video_properties.
         r#"INSERT INTO media_files (id, movie_id, file_path, size_bytes, jellyfin_id)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (jellyfin_id) WHERE jellyfin_id IS NOT NULL
            DO UPDATE SET
                last_seen_at = NOW(),
-               file_path = EXCLUDED.file_path,
-               size_bytes = EXCLUDED.size_bytes
+               file_path = EXCLUDED.file_path
            RETURNING id AS "id: MediaFileId", (xmax = 0) AS "was_inserted!: bool""#,
         new_id as MediaFileId,
         movie_id as MovieId,
@@ -63,13 +66,14 @@ pub(crate) async fn upsert_episode_file(
     let file_path = draft.media_file.path.as_ref().to_string_lossy();
 
     let row = sqlx::query!(
+        // size_bytes is owned by the probe step after discovery; do NOT
+        // overwrite it on resync (see upsert_movie_file for the full rationale).
         r#"INSERT INTO media_files (id, episode_id, file_path, size_bytes, jellyfin_id)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (jellyfin_id) WHERE jellyfin_id IS NOT NULL
            DO UPDATE SET
                last_seen_at = NOW(),
-               file_path = EXCLUDED.file_path,
-               size_bytes = EXCLUDED.size_bytes
+               file_path = EXCLUDED.file_path
            RETURNING id AS "id: MediaFileId", (xmax = 0) AS "was_inserted!: bool""#,
         new_id as MediaFileId,
         episode_id as EpisodeId,

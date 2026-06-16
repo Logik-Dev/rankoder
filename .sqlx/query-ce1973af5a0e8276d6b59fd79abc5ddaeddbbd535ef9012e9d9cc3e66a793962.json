@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO media_files (id, episode_id, file_path, size_bytes, jellyfin_id)\n           VALUES ($1, $2, $3, $4, $5)\n           ON CONFLICT (jellyfin_id) WHERE jellyfin_id IS NOT NULL\n           DO UPDATE SET\n               last_seen_at = NOW(),\n               file_path = EXCLUDED.file_path,\n               size_bytes = EXCLUDED.size_bytes\n           RETURNING id AS \"id: MediaFileId\", (xmax = 0) AS \"was_inserted!: bool\"",
+  "query": "INSERT INTO media_files (id, movie_id, file_path, size_bytes, jellyfin_id)\n           VALUES ($1, $2, $3, $4, $5)\n           ON CONFLICT (jellyfin_id) WHERE jellyfin_id IS NOT NULL\n           DO UPDATE SET\n               last_seen_at = NOW(),\n               file_path = EXCLUDED.file_path\n           RETURNING id AS \"id: MediaFileId\", (xmax = 0) AS \"was_inserted!: bool\"",
   "describe": {
     "columns": [
       {
@@ -35,5 +35,5 @@
       null
     ]
   },
-  "hash": "c03edc0cf73e201f510a8d6454e6a97f61f7f4d42d2f28dacf3981d1215e75cf"
+  "hash": "ce1973af5a0e8276d6b59fd79abc5ddaeddbbd535ef9012e9d9cc3e66a793962"
 }
