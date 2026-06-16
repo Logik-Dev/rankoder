@@ -13,12 +13,33 @@ pub trait FileSystem: Send + Sync {
     async fn exists(&self, path: &Path) -> bool;
 }
 
+/// `EXDEV` ("Invalid cross-device link"): rename(2) cannot move a file between
+/// filesystems. The errno is 18 on both Linux and macOS. We hit it because the
+/// media pool is a mergerfs union — a rename whose source and destination land
+/// on different underlying branches fails instead of moving the file.
+const EXDEV: i32 = 18;
+
+/// Rename `from` to `to`, falling back to copy + remove when the two paths live
+/// on different filesystems (e.g. across mergerfs branches), where rename(2)
+/// returns `EXDEV`. The copy is not atomic, but the caller's recovery logic
+/// tolerates a partially completed swap.
+pub(crate) async fn rename_or_copy(from: &Path, to: &Path) -> Result<(), std::io::Error> {
+    match tokio::fs::rename(from, to).await {
+        Err(e) if e.raw_os_error() == Some(EXDEV) => {
+            tokio::fs::copy(from, to).await?;
+            tokio::fs::remove_file(from).await?;
+            Ok(())
+        }
+        other => other,
+    }
+}
+
 pub struct RealFileSystem;
 
 #[async_trait]
 impl FileSystem for RealFileSystem {
     async fn rename(&self, from: &Path, to: &Path) -> Result<(), std::io::Error> {
-        tokio::fs::rename(from, to).await
+        rename_or_copy(from, to).await
     }
 
     async fn remove_file(&self, path: &Path) -> Result<(), std::io::Error> {
@@ -81,7 +102,7 @@ impl<FS: FileSystem> Swapper<FS> {
 
         if let Err(e) = self.fs.rename(temp, &final_path).await {
             error!(%e, "failed to rename temp to final, attempting rollback");
-            let _ = tokio::fs::rename(&retention_path, original).await;
+            let _ = self.fs.rename(&retention_path, original).await;
             return Err(TranscodeError::SwapFailed(e));
         }
 
@@ -230,11 +251,11 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, TranscodeError::SwapFailed(_)));
-        // First rename succeeded (original → retention), second rename failed.
-        // In the mock, the original is gone, temp still exists.
-        assert!(!mock.exists(&original).await);
+        // First rename moved original → retention, second rename (temp → final)
+        // failed, then the rollback moved the original back via the FS
+        // abstraction: original is restored and temp is left untouched.
+        assert!(mock.exists(&original).await);
         assert!(mock.exists(&temp).await);
-        // Rollback uses real std::fs::rename — doesn't affect the mock.
     }
 
     #[tokio::test]
