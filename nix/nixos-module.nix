@@ -160,8 +160,9 @@ in
       type = lib.types.bool;
       default = false;
       description = ''
-        Grant the service access to `/dev/dri` (and the video/render groups) for
-        VAAPI/QSV hardware HEVC encoding. Leave off for software-only encoding.
+        Grant the service access to the GPU (`/dev/dri` for VAAPI/QSV and the
+        `/dev/nvidia*` nodes for NVENC, plus the video/render groups) for
+        hardware HEVC encoding. Leave off for software-only encoding.
       '';
     };
 
@@ -259,7 +260,18 @@ in
       }
       // lib.optionalAttrs cfg.hardwareAcceleration {
         PrivateDevices = false;
-        DeviceAllow = [ "/dev/dri rw" ];
+        # /dev/dri covers VAAPI/QSV; the /dev/nvidia* nodes are required for
+        # NVENC (hevc_nvenc). Without them an explicit DeviceAllow forces a
+        # "closed" device policy that hides the GPU, so the encoder probe falls
+        # back to libx265 (CPU).
+        DeviceAllow = [
+          "/dev/dri rw"
+          "/dev/nvidia0 rw"
+          "/dev/nvidiactl rw"
+          "/dev/nvidia-uvm rw"
+          "/dev/nvidia-uvm-tools rw"
+          "/dev/nvidia-modeset rw"
+        ];
         SupplementaryGroups = [
           "video"
           "render"
