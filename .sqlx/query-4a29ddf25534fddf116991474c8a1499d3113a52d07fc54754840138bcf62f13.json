@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO media_files (id, movie_id, file_path, workflow_state)\n                VALUES ($1, $2, $3, 'done')\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4a29ddf25534fddf116991474c8a1499d3113a52d07fc54754840138bcf62f13"
+}

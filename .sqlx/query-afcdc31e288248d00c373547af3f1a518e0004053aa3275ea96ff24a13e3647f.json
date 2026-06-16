@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO retention_files (id, media_file_id, retained_path, original_size_bytes, moved_at)\n            VALUES ($1, $2, $3, $4, NOW() - make_interval(days => 10))\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "afcdc31e288248d00c373547af3f1a518e0004053aa3275ea96ff24a13e3647f"
+}

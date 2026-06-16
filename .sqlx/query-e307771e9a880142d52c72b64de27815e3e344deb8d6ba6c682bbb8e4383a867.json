@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO media_files\n                (id, movie_id, file_path, size_bytes, video_codec, height, width,\n                 duration_seconds, transcode_spec, workflow_state)\n            VALUES ($1, $2, $3, $4, 'h264', 720, 1280, 1.0, $5, 'transcoding')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Int8",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e307771e9a880142d52c72b64de27815e3e344deb8d6ba6c682bbb8e4383a867"
+}

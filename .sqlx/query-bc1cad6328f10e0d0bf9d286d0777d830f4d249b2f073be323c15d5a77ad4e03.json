@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO media_files (id, episode_id, file_path, workflow_state)\n               VALUES ($1, $2, $3, 'transcoding')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bc1cad6328f10e0d0bf9d286d0777d830f4d249b2f073be323c15d5a77ad4e03"
+}

@@ -69,10 +69,16 @@ impl TakeTranscodeDecisionService {
 
         let crf = crf_from_rating_and_bpp(bpp, tmdb_rating);
 
+        // Estimated reclaimed fraction: how much of the current bitrate sits
+        // above the minimum acceptable bpp. bpp > min_bpp is guaranteed here
+        // (checked above), so this is in (0, 1).
+        let estimated_saving_ratio = ((bpp - self.min_bpp) / bpp).clamp(0.0, 1.0);
+
         TranscodeDecision::Encode {
             bpp,
             compression_potential,
             crf,
+            estimated_saving_ratio,
         }
     }
 }

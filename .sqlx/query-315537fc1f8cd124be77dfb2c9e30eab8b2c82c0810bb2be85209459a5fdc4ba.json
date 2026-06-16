@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO series (id, title) VALUES ($1, 'in-flight series')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "315537fc1f8cd124be77dfb2c9e30eab8b2c82c0810bb2be85209459a5fdc4ba"
+}

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                    SELECT m.title, m.rating,\n                           COUNT(*)::bigint AS file_count,\n                           SUM(mf.size_bytes)::bigint AS total_size_bytes,\n                           SUM(mf.size_bytes * LEAST(GREATEST(COALESCE((mf.transcode_spec->>'compression_potential')::float8, 0), 0), 1))::bigint AS saved_bytes\n                    FROM media_files mf\n                    JOIN movies m ON mf.movie_id = m.id\n                    WHERE mf.movie_id = $1\n                      AND mf.workflow_state = 'pending_approval'\n                    GROUP BY m.title, m.rating\n                    ",
+  "query": "\n                    SELECT m.title, m.rating,\n                           COUNT(*)::bigint AS file_count,\n                           SUM(mf.size_bytes)::bigint AS total_size_bytes,\n                           SUM(mf.size_bytes * GREATEST(LEAST(COALESCE((mf.transcode_spec->>'estimated_saving_ratio')::float8, 0), 1), 0))::bigint AS saved_bytes\n                    FROM media_files mf\n                    JOIN movies m ON mf.movie_id = m.id\n                    WHERE mf.movie_id = $1\n                      AND mf.workflow_state = 'pending_approval'\n                    GROUP BY m.title, m.rating\n                    ",
   "describe": {
     "columns": [
       {
@@ -57,5 +57,5 @@
       null
     ]
   },
-  "hash": "a135bbf22866310ad7d9ff31992e8cceb144267a3ee048e785280018ce185867"
+  "hash": "c56e3f015f37f9374d95ac972069c32d902f3ec2759262fda0ef4f6770192ae7"
 }

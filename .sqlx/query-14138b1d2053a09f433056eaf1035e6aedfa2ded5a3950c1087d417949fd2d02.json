@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO episodes (id, series_id, season_number, episode_number, title)\n                   VALUES ($1, $2, 1, $3, 'ep')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int2"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "14138b1d2053a09f433056eaf1035e6aedfa2ded5a3950c1087d417949fd2d02"
+}

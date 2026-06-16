@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO movies (id, title) VALUES ($1, 'in-flight test')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "be0d62d067f3bc2a75cf8f51774e4c2a2ea5c426933d800e5b99723ee377b211"
+}

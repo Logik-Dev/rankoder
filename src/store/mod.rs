@@ -344,12 +344,14 @@ impl MediaStore {
                 bpp,
                 compression_potential,
                 crf,
+                estimated_saving_ratio,
             } => {
                 let mut tx = self.pool.begin().await?;
                 let spec = serde_json::json!({
                     "crf": crf,
                     "bpp": bpp,
                     "compression_potential": compression_potential,
+                    "estimated_saving_ratio": estimated_saving_ratio,
                 });
                 let result = sqlx::query!(
                     r#"
@@ -597,7 +599,7 @@ impl MediaStore {
                     SELECT s.title, s.rating,
                            COUNT(*)::bigint AS file_count,
                            SUM(mf.size_bytes)::bigint AS total_size_bytes,
-                           SUM(mf.size_bytes * LEAST(GREATEST(COALESCE((mf.transcode_spec->>'compression_potential')::float8, 0), 0), 1))::bigint AS saved_bytes
+                           SUM(mf.size_bytes * GREATEST(LEAST(COALESCE((mf.transcode_spec->>'estimated_saving_ratio')::float8, 0), 1), 0))::bigint AS saved_bytes
                     FROM media_files mf
                     JOIN episodes e ON mf.episode_id = e.id
                     JOIN series s ON e.series_id = s.id
@@ -629,7 +631,7 @@ impl MediaStore {
                     SELECT m.title, m.rating,
                            COUNT(*)::bigint AS file_count,
                            SUM(mf.size_bytes)::bigint AS total_size_bytes,
-                           SUM(mf.size_bytes * LEAST(GREATEST(COALESCE((mf.transcode_spec->>'compression_potential')::float8, 0), 0), 1))::bigint AS saved_bytes
+                           SUM(mf.size_bytes * GREATEST(LEAST(COALESCE((mf.transcode_spec->>'estimated_saving_ratio')::float8, 0), 1), 0))::bigint AS saved_bytes
                     FROM media_files mf
                     JOIN movies m ON mf.movie_id = m.id
                     WHERE mf.movie_id = $1
