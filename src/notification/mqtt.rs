@@ -76,8 +76,13 @@ impl MqttNotifier {
 impl ApprovalNotifier for MqttNotifier {
     async fn request_approval(&self, request: &ApprovalRequest) -> Result<(), NotifierError> {
         let payload = serde_json::to_vec(request)?;
+        // Retained so a pending request survives a Home Assistant restart or a
+        // late MQTT subscription: the last proposal is redelivered on connect
+        // instead of being lost (the 5-minute stale re-publish is the only
+        // other recovery path). Only the most recent request per topic is kept;
+        // the stale checker still re-publishes the others.
         self.client
-            .publish(REQUEST_TOPIC, QoS::AtLeastOnce, false, payload)
+            .publish(REQUEST_TOPIC, QoS::AtLeastOnce, true, payload)
             .await
             .map_err(|e| NotifierError::Client(e.to_string()))
     }
