@@ -31,6 +31,8 @@ pub struct AppConfig {
     pub transcode_encoder_override: String,
     pub transcode_min_size_reduction: f64,
     pub transcode_retention_days: i32,
+    pub min_vmaf: f64,
+    pub vmaf_n_subsample: u32,
     pub radarr_url: Option<String>,
     pub radarr_api_key: Option<String>,
     pub sonarr_url: Option<String>,
@@ -66,6 +68,11 @@ impl AppConfig {
             transcode_encoder_override: parse_env("TRANSCODE_ENCODER", "auto".to_string())?,
             transcode_min_size_reduction: parse_env("TRANSCODE_MIN_SIZE_REDUCTION", 0.1)?,
             transcode_retention_days: parse_env("TRANSCODE_RETENTION_DAYS", 7)?,
+            // Post-encode quality gate. The VMAF score is always measured and
+            // recorded; MIN_VMAF=0 (default) is "observe only" — measure but
+            // never reject, so the threshold can be calibrated from real data.
+            min_vmaf: parse_env("MIN_VMAF", 0.0)?,
+            vmaf_n_subsample: parse_env("VMAF_N_SUBSAMPLE", 5)?,
             // Optional: when unset, no media-manager refresh is performed after
             // a transcode completes. Radarr handles movies, Sonarr series.
             radarr_url: env::var("RADARR_URL").ok(),

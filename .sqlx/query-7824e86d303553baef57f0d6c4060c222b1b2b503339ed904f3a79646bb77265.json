@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE media_files\n                SET transcode_spec = COALESCE(transcode_spec, '{}'::jsonb)\n                    || jsonb_build_object('vmaf', $2::float8)\n                WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7824e86d303553baef57f0d6c4060c222b1b2b503339ed904f3a79646bb77265"
+}

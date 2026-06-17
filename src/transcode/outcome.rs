@@ -9,7 +9,12 @@ use crate::models::{
 #[derive(Debug)]
 pub enum TranscodeOutcome {
     Completed(CompletedTranscode),
-    Skipped(SkipReason),
+    Skipped {
+        reason: SkipReason,
+        /// Measured VMAF when the skip happened at the quality gate
+        /// (`QualityTooLow`); `None` for skips decided before measurement.
+        vmaf: Option<f64>,
+    },
     /// Reserved: recovery determined that the DB already reflects a completed
     /// transcode, so no store update is required.
     #[allow(dead_code)]
@@ -23,4 +28,7 @@ pub struct CompletedTranscode {
     pub new_size: SizeBytes,
     pub bitrate: Option<Bitrate>,
     pub retention_path: PathBuf,
+    /// Measured VMAF of the accepted encode; `None` if measurement failed or
+    /// the result came from crash recovery (not re-measured).
+    pub vmaf: Option<f64>,
 }

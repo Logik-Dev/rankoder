@@ -28,7 +28,7 @@ use crate::{
         outcome::{CompletedTranscode, TranscodeOutcome},
         recovery::{self, RecoveryAction},
         swap::{RealFileSystem, Swapper},
-        validation,
+        validation, vmaf,
     },
 };
 
@@ -52,10 +52,13 @@ pub struct TranscodeOrchestrator {
     tmp_dir: PathBuf,
     retention_dir: PathBuf,
     min_size_reduction: f64,
+    min_vmaf: f64,
+    vmaf_n_subsample: u32,
     notifiers: MediaNotifiers,
 }
 
 impl TranscodeOrchestrator {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx: mpsc::Receiver<MediaFileId>,
         store: Arc<MediaStore>,
@@ -63,6 +66,8 @@ impl TranscodeOrchestrator {
         tmp_dir: PathBuf,
         retention_dir: PathBuf,
         min_size_reduction: f64,
+        min_vmaf: f64,
+        vmaf_n_subsample: u32,
         notifiers: MediaNotifiers,
     ) -> Self {
         Self {
@@ -72,6 +77,8 @@ impl TranscodeOrchestrator {
             tmp_dir,
             retention_dir,
             min_size_reduction,
+            min_vmaf,
+            vmaf_n_subsample,
             notifiers,
         }
     }
@@ -94,6 +101,8 @@ impl TranscodeOrchestrator {
         let tmp_dir = self.tmp_dir;
         let retention_dir = self.retention_dir;
         let min_size_reduction = self.min_size_reduction;
+        let min_vmaf = self.min_vmaf;
+        let vmaf_n_subsample = self.vmaf_n_subsample;
         let notifiers = self.notifiers;
         let mut rx = self.rx;
 
@@ -142,6 +151,8 @@ impl TranscodeOrchestrator {
                     let t = tmp_dir.clone();
                     let r = retention_dir.clone();
                     let msr = min_size_reduction;
+                    let mv = min_vmaf;
+                    let ns = vmaf_n_subsample;
                     let n = notifiers.clone();
 
                     join_set.spawn(async move {
@@ -149,7 +160,7 @@ impl TranscodeOrchestrator {
                         // actually serializes transcoding.
                         let _permit = permit;
                         if let Err(e) =
-                            Self::process_file(s, enc, &t, &r, msr, n, media_file_id).await
+                            Self::process_file(s, enc, &t, &r, msr, mv, ns, n, media_file_id).await
                         {
                             error!(%e, ?media_file_id, "transcode failed");
                         }
@@ -178,11 +189,14 @@ impl TranscodeOrchestrator {
     }
 
     #[instrument(skip(encoder, tmp_dir, retention_dir, media_file), fields(id = ?media_file.id), err)]
+    #[allow(clippy::too_many_arguments)]
     async fn transcode_file(
         encoder: Encoder,
         tmp_dir: &Path,
         retention_dir: &Path,
         min_size_reduction: f64,
+        min_vmaf: f64,
+        vmaf_n_subsample: u32,
         media_file: &MediaFile,
     ) -> Result<TranscodeOutcome, TranscodeError> {
         let media_file_id = media_file.id;
@@ -238,6 +252,8 @@ impl TranscodeOrchestrator {
                     new_size: output_vp.size_bytes,
                     bitrate: output_vp.bitrate,
                     retention_path,
+                    // Recovered from a prior run; not re-measured.
+                    vmaf: None,
                 }));
             }
             RecoveryAction::MarkFailed { reason } => {
@@ -308,9 +324,41 @@ impl TranscodeOrchestrator {
                 threshold = %min_acceptable,
                 "insufficient size reduction, skipping"
             );
-            return Ok(TranscodeOutcome::Skipped(
-                SkipReason::InsufficientSizeReduction,
-            ));
+            return Ok(TranscodeOutcome::Skipped {
+                reason: SkipReason::InsufficientSizeReduction,
+                vmaf: None,
+            });
+        }
+
+        // Quality gate. The VMAF is always measured and recorded; enforcement
+        // only kicks in when min_vmaf > 0 ("observe only" otherwise). A
+        // measurement failure must not throw away a good encode, so we log and
+        // proceed without a score.
+        let vmaf = match vmaf::compute_vmaf(&original_path, &temp_path, vmaf_n_subsample).await {
+            Ok(score) => {
+                info!(?media_file_id, vmaf = %score, "vmaf measured");
+                Some(score)
+            }
+            Err(e) => {
+                warn!(%e, ?media_file_id, "vmaf measurement failed, proceeding without score");
+                None
+            }
+        };
+
+        if min_vmaf > 0.0
+            && let Some(score) = vmaf
+            && score < min_vmaf
+        {
+            info!(
+                ?media_file_id,
+                vmaf = %score,
+                threshold = %min_vmaf,
+                "vmaf below threshold, skipping"
+            );
+            return Ok(TranscodeOutcome::Skipped {
+                reason: SkipReason::QualityTooLow,
+                vmaf: Some(score),
+            });
         }
 
         let swapper = Swapper::new(RealFileSystem);
@@ -328,6 +376,7 @@ impl TranscodeOrchestrator {
             new_size,
             bitrate: output_vp.bitrate,
             retention_path: result.retention_path,
+            vmaf,
         }))
     }
 
@@ -336,12 +385,15 @@ impl TranscodeOrchestrator {
         fields(id = ?media_file_id),
         err
     )]
+    #[allow(clippy::too_many_arguments)]
     async fn process_file(
         store: Arc<MediaStore>,
         encoder: Encoder,
         tmp_dir: &Path,
         retention_dir: &Path,
         min_size_reduction: f64,
+        min_vmaf: f64,
+        vmaf_n_subsample: u32,
         notifiers: MediaNotifiers,
         media_file_id: MediaFileId,
     ) -> Result<()> {
@@ -352,11 +404,20 @@ impl TranscodeOrchestrator {
             tmp_dir,
             retention_dir,
             min_size_reduction,
+            min_vmaf,
+            vmaf_n_subsample,
             &media_file,
         )
         .await
         {
             Ok(TranscodeOutcome::Completed(c)) => {
+                // Record the measured quality before committing, so it's
+                // queryable for accepted encodes too (calibration).
+                if let Some(score) = c.vmaf
+                    && let Err(e) = store.record_vmaf(&media_file_id, score).await
+                {
+                    warn!(%e, ?media_file_id, "failed to record vmaf");
+                }
                 store
                     .complete_transcode(
                         &media_file_id,
@@ -381,7 +442,14 @@ impl TranscodeOrchestrator {
                         .await;
                 }
             }
-            Ok(TranscodeOutcome::Skipped(reason)) => {
+            Ok(TranscodeOutcome::Skipped { reason, vmaf }) => {
+                // Record the score even on a quality reject, so the rejected
+                // population is visible when calibrating the threshold.
+                if let Some(score) = vmaf
+                    && let Err(e) = store.record_vmaf(&media_file_id, score).await
+                {
+                    warn!(%e, ?media_file_id, "failed to record vmaf");
+                }
                 store
                     .apply_event(
                         &media_file_id,
@@ -698,6 +766,8 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.05,
+            0.0,
+            1,
             &mf,
         )
         .await
@@ -736,6 +806,8 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.1,
+            0.0,
+            1,
             &mf,
         )
         .await
@@ -744,7 +816,10 @@ mod tests {
         assert!(
             matches!(
                 outcome,
-                TranscodeOutcome::Skipped(SkipReason::InsufficientSizeReduction)
+                TranscodeOutcome::Skipped {
+                    reason: SkipReason::InsufficientSizeReduction,
+                    ..
+                }
             ),
             "expected Skipped, got {outcome:?}"
         );
@@ -773,6 +848,8 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.05,
+            0.0,
+            1,
             &mf,
         )
         .await
@@ -797,6 +874,8 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.05,
+            0.0,
+            1,
             &mf,
         )
         .await
@@ -931,6 +1010,8 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.05,
+            0.0,
+            1,
             MediaNotifiers::default(),
             id,
         )
@@ -973,6 +1054,8 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.1,
+            0.0,
+            1,
             MediaNotifiers::default(),
             id,
         )
@@ -1016,6 +1099,8 @@ mod tests {
             &ws.tmp,
             &ws.retention,
             0.05,
+            0.0,
+            1,
             MediaNotifiers::default(),
             id,
         )

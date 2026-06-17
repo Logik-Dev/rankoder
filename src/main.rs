@@ -154,6 +154,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.transcode_tmp_dir.into(),
         cfg.transcode_retention_dir.into(),
         cfg.transcode_min_size_reduction,
+        cfg.min_vmaf,
+        cfg.vmaf_n_subsample,
         MediaNotifiers {
             movie: movie_notifier,
             series: series_notifier,

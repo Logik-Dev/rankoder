@@ -11,6 +11,7 @@ pub mod reaper;
 pub mod recovery;
 pub mod swap;
 pub mod validation;
+pub mod vmaf;
 
 pub(crate) fn compute_swap_paths(
     original: &Path,

@@ -238,7 +238,11 @@ Add the flake as an input and import the module:
             tmpDir       = "/srv/media/.rankoder-tmp";   # same FS as library
             retentionDir = "/srv/rankoder-retention";    # OUTSIDE Radarr/Sonarr libs
 
-            # hardwareAcceleration = true;  # grant /dev/dri for VAAPI/QSV
+            # Library roots to grant read-write so the in-place swap can
+            # replace originals (required under ProtectSystem=strict):
+            mediaPaths = [ "/srv/media" ];
+
+            # hardwareAcceleration = true;  # grant /dev/dri (VAAPI/QSV) + /dev/nvidia* (NVENC)
           };
         })
       ];
@@ -278,12 +282,40 @@ Add the flake as an input and import the module:
 | `environmentFile` | — (required) | Secrets file (`JELLYFIN_API_KEY`, …) |
 | `jellyfinUrl` | — (required) | Jellyfin base URL |
 | `tmpDir` / `retentionDir` | — (required) | Scratch / originals retention |
+| `mediaPaths` | `[]` | Library roots to grant **read-write** so the in-place swap can replace originals (e.g. `[ "/mnt/storage/medias" ]`). Required under `ProtectSystem=strict`, else the swap fails with EROFS. |
 | `mqtt.host` / `mqtt.port` | `localhost` / `1883` | Approval broker |
 | `radarrUrl` / `sonarrUrl` | `null` | Enable per-manager refresh |
 | `database.url` | local socket | `DATABASE_URL` |
 | `database.provision` | `true` | Create DB + role on existing Postgres |
 | `retentionDays` | `7` | Days before originals are reaped |
 | `autoMigrate` | `true` | Run migrations at startup |
-| `hardwareAcceleration` | `false` | Grant `/dev/dri` + video/render groups |
+| `hardwareAcceleration` | `false` | Grant the GPU: `/dev/dri` (VAAPI/QSV) + `/dev/nvidia*` (NVENC) + video/render groups |
 | `logLevel` | `info` | `RUST_LOG` / tracing filter |
-| `settings` | `{}` | Extra env vars (override the above) |
+| `settings` | `{}` | Extra env vars (override the above) — see Analysis & quality tuning |
+
+### Analysis & quality tuning
+
+Non-secret knobs passed via `settings` (env vars). All have defaults; override
+only what you need:
+
+| Env var | Default | Notes |
+| --- | --- | --- |
+| `MIN_ANALYSIS_BPP` | `0.04` | h264 bits-per-pixel baseline |
+| `MIN_ANALYSIS_BPP_HEVC` | `0.15` | HEVC baseline — only re-encode clearly over-bitrate (remux-tier) HEVC. AV1 is never re-encoded |
+| `MIN_COMPRESSION_POTENTIAL` | `1.0` | Resolution-aware headroom gate |
+| `MIN_ANALYSIS_SIZE_PER_HOUR_GB` | `2.0` | Skip files below this size/hour |
+| `TRANSCODE_MIN_SIZE_REDUCTION` | `0.1` | Reject an encode that isn't at least this much smaller |
+| `MIN_VMAF` | `0.0` | Post-encode VMAF gate. `0` = observe only (measure + record, never reject); set > 0 to reject encodes below it |
+| `VMAF_N_SUBSAMPLE` | `5` | Evaluate 1 frame out of N for VMAF (cost vs precision) |
+
+The VMAF score is recorded under `transcode_spec.vmaf` for **every** attempt
+(accepted or rejected), so the threshold can be calibrated from the real
+distribution before enforcing:
+
+```sql
+SELECT round((transcode_spec->>'vmaf')::float8) AS vmaf, count(*)
+FROM media_files WHERE transcode_spec ? 'vmaf' GROUP BY 1 ORDER BY 1;
+```
+
+VMAF requires ffmpeg built with libvmaf; the flake's `packages.default` wraps
+`ffmpeg.override { withVmaf = true; }` automatically.

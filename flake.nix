@@ -73,9 +73,11 @@
               doCheck = false;
               nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
               # ffprobe/ffmpeg are runtime dependencies shelled out to at run time.
+              # withVmaf enables the libvmaf filter used for the post-encode
+              # quality gate.
               postInstall = ''
                 wrapProgram $out/bin/rankoder \
-                  --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg ]}
+                  --prefix PATH : ${pkgs.lib.makeBinPath [ (pkgs.ffmpeg.override { withVmaf = true; }) ]}
               '';
               meta = {
                 description = "Rating-aware, human-approved HEVC re-encoder";

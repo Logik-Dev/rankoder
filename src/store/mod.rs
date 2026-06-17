@@ -854,6 +854,29 @@ impl MediaStore {
         Ok(())
     }
 
+    /// Merge the measured VMAF into `transcode_spec` so it's queryable for
+    /// every transcode attempt (accepted or rejected), independent of the
+    /// workflow state the row ends up in. Best-effort metadata, no state guard.
+    pub async fn record_vmaf(
+        &self,
+        media_file_id: &MediaFileId,
+        vmaf: f64,
+    ) -> Result<(), StoreError> {
+        sqlx::query!(
+            r#"
+                UPDATE media_files
+                SET transcode_spec = COALESCE(transcode_spec, '{}'::jsonb)
+                    || jsonb_build_object('vmaf', $2::float8)
+                WHERE id = $1
+            "#,
+            media_file_id.as_uuid(),
+            vmaf,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn fetch_expired_retention_files(
         &self,
         retention_days: i32,
