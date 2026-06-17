@@ -20,6 +20,7 @@ pub struct AppConfig {
     pub auto_migrate: bool,
     pub min_size_per_hour_gb: f64,
     pub min_bpp: f64,
+    pub min_bpp_hevc: f64,
     pub min_compression_potential: f64,
     pub mqtt_host: String,
     pub mqtt_port: u16,
@@ -48,6 +49,10 @@ impl AppConfig {
             auto_migrate: parse_bool_env("AUTO_MIGRATE", false)?,
             min_size_per_hour_gb: parse_env("MIN_ANALYSIS_SIZE_PER_HOUR_GB", 2.0)?,
             min_bpp: parse_env("MIN_ANALYSIS_BPP", 0.04)?,
+            // HEVC is already efficient, so only re-encode clearly over-bitrate
+            // sources (remux-tier). Higher dedicated threshold, gated on bpp
+            // alone (the compression_potential heuristic is tuned for h264).
+            min_bpp_hevc: parse_env("MIN_ANALYSIS_BPP_HEVC", 0.15)?,
             min_compression_potential: parse_env("MIN_COMPRESSION_POTENTIAL", 1.0)?,
             mqtt_host: env::var("MQTT_HOST")
                 .map_err(|_| ConfigError::Missing("MQTT_HOST".into()))?,

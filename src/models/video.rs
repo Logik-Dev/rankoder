@@ -116,7 +116,10 @@ impl VideoCodec {
     pub fn needs_transcoding(&self) -> bool {
         match self {
             Self::H264 => true,
-            Self::Hevc => false,
+            // HEVC is a candidate too, but only when clearly over-bitrate; the
+            // decision gates it on a higher, dedicated bpp threshold. AV1 stays
+            // excluded (already efficient — re-encoding to HEVC would regress).
+            Self::Hevc => true,
             Self::Av1 => false,
             Self::Missing => true,
             Self::Unknown(_) => true,

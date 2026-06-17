@@ -3,6 +3,7 @@ use tracing::{debug, instrument};
 use crate::models::{
     media_file::MediaFile,
     transcode::{SkipReason, TranscodeDecision},
+    video::VideoCodec,
 };
 
 // With min_compression_potential=1.0 (default), the effective bpp thresholds become:
@@ -14,14 +15,21 @@ const POTENTIAL_SCALE_FACTOR: f64 = 10.0;
 pub struct TakeTranscodeDecisionService {
     min_size_per_hour_gb: f64,
     min_bpp: f64,
+    min_bpp_hevc: f64,
     min_compression_potential: f64,
 }
 
 impl TakeTranscodeDecisionService {
-    pub fn new(min_size_per_hour_gb: f64, min_bpp: f64, min_compression_potential: f64) -> Self {
+    pub fn new(
+        min_size_per_hour_gb: f64,
+        min_bpp: f64,
+        min_bpp_hevc: f64,
+        min_compression_potential: f64,
+    ) -> Self {
         Self {
             min_size_per_hour_gb,
             min_bpp,
+            min_bpp_hevc,
             min_compression_potential,
         }
     }
@@ -51,13 +59,23 @@ impl TakeTranscodeDecisionService {
             return TranscodeDecision::Skip(SkipReason::MissingProbeData);
         };
 
-        if bpp < self.min_bpp {
+        // HEVC is already efficient, so it gets a higher baseline: only clearly
+        // over-bitrate (remux-tier) sources qualify. Everything downstream — the
+        // compression_potential gate and the saving estimate — uses this
+        // baseline, so the resolution-aware headroom check applies uniformly.
+        let effective_min_bpp = if matches!(vp.video_codec, VideoCodec::Hevc) {
+            self.min_bpp_hevc
+        } else {
+            self.min_bpp
+        };
+
+        if bpp < effective_min_bpp {
             return TranscodeDecision::Skip(SkipReason::AlreadyCompressed);
         }
 
         let resolution_factor = resolution_factor(vp.resolution.height(), vp.resolution.width());
         let compression_potential =
-            (bpp - self.min_bpp) * POTENTIAL_SCALE_FACTOR * resolution_factor as f64;
+            (bpp - effective_min_bpp) * POTENTIAL_SCALE_FACTOR * resolution_factor as f64;
 
         if compression_potential <= self.min_compression_potential {
             return TranscodeDecision::SkipWithAnalysis {
@@ -70,9 +88,9 @@ impl TakeTranscodeDecisionService {
         let crf = crf_from_rating_and_bpp(bpp, tmdb_rating);
 
         // Estimated reclaimed fraction: how much of the current bitrate sits
-        // above the minimum acceptable bpp. bpp > min_bpp is guaranteed here
-        // (checked above), so this is in (0, 1).
-        let estimated_saving_ratio = ((bpp - self.min_bpp) / bpp).clamp(0.0, 1.0);
+        // above the minimum acceptable bpp. bpp > effective_min_bpp is
+        // guaranteed here (checked above), so this is in (0, 1).
+        let estimated_saving_ratio = ((bpp - effective_min_bpp) / bpp).clamp(0.0, 1.0);
 
         TranscodeDecision::Encode {
             bpp,

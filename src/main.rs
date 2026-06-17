@@ -69,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let decision_service = TakeTranscodeDecisionService::new(
         cfg.min_size_per_hour_gb,
         cfg.min_bpp,
+        cfg.min_bpp_hevc,
         cfg.min_compression_potential,
     );
     let analysis_orchestrator = AnalysisOrchestrator::new(store.clone(), decision_service);
