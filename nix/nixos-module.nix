@@ -144,6 +144,20 @@ in
       description = "Days to keep originals before the reaper deletes them.";
     };
 
+    mediaPaths = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "/mnt/storage/medias" ];
+      description = ''
+        Library directories whose files rankoder rewrites in place. With the
+        hardened `ProtectSystem = "strict"` the whole filesystem is read-only
+        except the service's writable paths, so the roots that hold the
+        movies/episodes MUST be listed here — otherwise the final swap fails
+        with EROFS ("Read-only file system"). List the common root(s), e.g. the
+        Jellyfin library mount.
+      '';
+    };
+
     autoMigrate = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -253,10 +267,14 @@ in
         RestrictNamespaces = true;
         RestrictRealtime = true;
         LockPersonality = true;
+        # The media library roots are needed read-write: the swap replaces the
+        # original in place. Without them ProtectSystem=strict makes the library
+        # read-only and the swap fails with EROFS.
         ReadWritePaths = [
           cfg.tmpDir
           cfg.retentionDir
-        ];
+        ]
+        ++ cfg.mediaPaths;
       }
       // lib.optionalAttrs cfg.hardwareAcceleration {
         PrivateDevices = false;
