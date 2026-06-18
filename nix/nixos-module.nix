@@ -180,6 +180,31 @@ in
       '';
     };
 
+    backfillVmaf = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        One-shot maintenance pass (BACKFILL_VMAF): on startup, measure VMAF for
+        already-transcoded (`done`) files that predate the quality gate, while
+        their original is still in retention. Idempotent — already-scored files
+        are skipped — so leaving it on is harmless, but the intended workflow is
+        enable -> deploy once -> disable. Time-limited by
+        {option}`retentionDays`: only files whose original has not yet been
+        reaped can be scored.
+      '';
+    };
+
+    requeueQualitySkips = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        One-shot maintenance pass (REQUEUE_QUALITY_SKIPS): on startup, re-encode
+        files previously rejected as `QualityTooLow` whose recorded VMAF now
+        clears `MIN_VMAF`. Use after lowering `MIN_VMAF`. Safe and idempotent;
+        enable -> deploy once -> disable.
+      '';
+    };
+
     settings = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
@@ -239,6 +264,8 @@ in
       }
       // lib.optionalAttrs (cfg.radarrUrl != null) { RADARR_URL = cfg.radarrUrl; }
       // lib.optionalAttrs (cfg.sonarrUrl != null) { SONARR_URL = cfg.sonarrUrl; }
+      // lib.optionalAttrs cfg.backfillVmaf { BACKFILL_VMAF = "1"; }
+      // lib.optionalAttrs cfg.requeueQualitySkips { REQUEUE_QUALITY_SKIPS = "1"; }
       // cfg.settings;
 
       serviceConfig = {

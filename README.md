@@ -291,6 +291,8 @@ Add the flake as an input and import the module:
 | `autoMigrate` | `true` | Run migrations at startup |
 | `hardwareAcceleration` | `false` | Grant the GPU: `/dev/dri` (VAAPI/QSV) + `/dev/nvidia*` (NVENC) + video/render groups |
 | `logLevel` | `info` | `RUST_LOG` / tracing filter |
+| `backfillVmaf` | `false` | One-shot: score `done` files that predate the VMAF gate (`BACKFILL_VMAF`). Enable → deploy once → disable |
+| `requeueQualitySkips` | `false` | One-shot: re-encode `QualityTooLow` skips that now clear `MIN_VMAF` (`REQUEUE_QUALITY_SKIPS`). Enable → deploy once → disable |
 | `settings` | `{}` | Extra env vars (override the above) — see Analysis & quality tuning |
 
 ### Analysis & quality tuning
