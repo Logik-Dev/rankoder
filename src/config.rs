@@ -33,6 +33,8 @@ pub struct AppConfig {
     pub transcode_retention_days: i32,
     pub min_vmaf: f64,
     pub vmaf_n_subsample: u32,
+    pub backfill_vmaf: bool,
+    pub requeue_quality_skips: bool,
     pub radarr_url: Option<String>,
     pub radarr_api_key: Option<String>,
     pub sonarr_url: Option<String>,
@@ -73,6 +75,10 @@ impl AppConfig {
             // never reject, so the threshold can be calibrated from real data.
             min_vmaf: parse_env("MIN_VMAF", 0.0)?,
             vmaf_n_subsample: parse_env("VMAF_N_SUBSAMPLE", 5)?,
+            // One-shot maintenance flags, read at startup. Both are idempotent,
+            // but documented as set -> run once -> unset.
+            backfill_vmaf: parse_bool_env("BACKFILL_VMAF", false)?,
+            requeue_quality_skips: parse_bool_env("REQUEUE_QUALITY_SKIPS", false)?,
             // Optional: when unset, no media-manager refresh is performed after
             // a transcode completes. Radarr handles movies, Sonarr series.
             radarr_url: env::var("RADARR_URL").ok(),

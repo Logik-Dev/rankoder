@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE media_files\n                SET workflow_state = 'transcoding'\n                WHERE workflow_state = 'skipped'\n                  AND jsonb_exists(transcode_spec, 'vmaf')\n                  AND (transcode_spec->>'vmaf')::float8 >= $1\n                RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c1136a09fbd5ce875fc147c3aff5b2d17b2f15446fc706b33aae9055bc1f0b7e"
+}

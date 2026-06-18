@@ -319,3 +319,23 @@ FROM media_files WHERE transcode_spec ? 'vmaf' GROUP BY 1 ORDER BY 1;
 
 VMAF requires ffmpeg built with libvmaf; the flake's `packages.default` wraps
 `ffmpeg.override { withVmaf = true; }` automatically.
+
+#### One-shot VMAF maintenance flags
+
+Two startup flags help calibrate and operate the gate. Both are idempotent, but
+the intended workflow is **set → run once → unset**.
+
+| Env var | Default | Notes |
+| --- | --- | --- |
+| `BACKFILL_VMAF` | `0` | On startup, measure VMAF for `done` files that predate the gate, **while their original is still in retention**. Idempotent (scored files are skipped), runs sequentially in the background so it doesn't starve live transcodes |
+| `REQUEUE_QUALITY_SKIPS` | `0` | On startup, re-encode files previously rejected as `QualityTooLow` whose recorded score now clears the current `MIN_VMAF`. Use after **lowering** `MIN_VMAF` |
+
+`BACKFILL_VMAF` is time-limited: only files whose original is still within
+`TRANSCODE_RETENTION_DAYS` (7 by default) can be scored — the rest are already
+reaped. Count the backfillable population first:
+
+```sql
+SELECT count(*)
+FROM media_files mf JOIN retention_files rf ON rf.media_file_id = mf.id
+WHERE mf.workflow_state = 'done' AND NOT (mf.transcode_spec ? 'vmaf');
+```

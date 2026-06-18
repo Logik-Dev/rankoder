@@ -27,6 +27,7 @@ mod analysis;
 mod approval;
 mod config;
 mod listener;
+mod maintenance;
 pub mod models;
 mod notification;
 mod probe;
@@ -162,6 +163,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
+    // One-shot: re-enqueue quality-rejected files after MIN_VMAF was lowered.
+    if cfg.requeue_quality_skips {
+        maintenance::run_requeue_quality_skips(store.clone(), cfg.min_vmaf).await?;
+    }
+
     // Recovery: re-enqueue files stuck in Transcoding state.
     // Now largely redundant: the transcode orchestrator's periodic stale
     // re-queue fires its first tick immediately on startup and recovers the
@@ -198,6 +204,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let status_reporter = StatusReporter::new(store.clone(), status_notifier);
     join_set.spawn(status_reporter.run(token.child_token()));
+
+    // One-shot VMAF backfill. Detached (not in `join_set`) so its completion
+    // doesn't trip the shutdown select; the child token stops it on Ctrl+C.
+    if cfg.backfill_vmaf {
+        tokio::spawn(maintenance::run_vmaf_backfill(
+            store.clone(),
+            cfg.vmaf_n_subsample,
+            token.child_token(),
+        ));
+    }
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {

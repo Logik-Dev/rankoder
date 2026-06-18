@@ -877,6 +877,60 @@ impl MediaStore {
         Ok(())
     }
 
+    /// `done` files that predate the quality gate and still have their original
+    /// in retention (the `JOIN` guarantees the source is on disk — the reaper
+    /// deletes the file and the row together). Returns `(id, original_path,
+    /// current_path)` for a retroactive VMAF measurement. Idempotent: scored
+    /// files fall out of the filter.
+    pub async fn fetch_done_files_missing_vmaf(
+        &self,
+    ) -> Result<Vec<(MediaFileId, String, String)>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+                SELECT mf.id, rf.retained_path, mf.file_path
+                FROM media_files mf
+                JOIN retention_files rf ON rf.media_file_id = mf.id
+                WHERE mf.workflow_state = 'done'
+                  AND COALESCE(jsonb_exists(mf.transcode_spec, 'vmaf'), false) = false
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (MediaFileId::from(r.id), r.retained_path, r.file_path))
+            .collect())
+    }
+
+    /// Move quality-rejected files (`skipped` with a recorded VMAF, i.e. a
+    /// post-encode `QualityTooLow`) back into `transcoding` so they are
+    /// re-encoded against the current threshold. Only files whose previously
+    /// measured score now clears `min_vmaf` are touched, which keeps the
+    /// operation safe and idempotent — a re-encode reproduces ~the same score,
+    /// so genuine rejects are never looped. Returns the requeued ids; the caller
+    /// feeds them to the transcode channel.
+    pub async fn requeue_quality_skips(
+        &self,
+        min_vmaf: f64,
+    ) -> Result<Vec<MediaFileId>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+                UPDATE media_files
+                SET workflow_state = 'transcoding'
+                WHERE workflow_state = 'skipped'
+                  AND jsonb_exists(transcode_spec, 'vmaf')
+                  AND (transcode_spec->>'vmaf')::float8 >= $1
+                RETURNING id
+            "#,
+            min_vmaf,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
+    }
+
     pub async fn fetch_expired_retention_files(
         &self,
         retention_days: i32,
@@ -1137,6 +1191,192 @@ mod tests {
         assert_eq!(failed_after - failed_before, 1);
 
         for id in [fail_movie, done_movie] {
+            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    /// Inserts a movie + one media_file in `state` with the given
+    /// `transcode_spec`. Returns `(movie_id, file_id)`; deleting the movie
+    /// cascades to the file (and its retention rows).
+    async fn insert_movie_spec(
+        pool: &PgPool,
+        state: WorkflowStateTag,
+        spec: Option<serde_json::Value>,
+    ) -> (Uuid, Uuid) {
+        let movie_id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO movies (id, title) VALUES ($1, 'spec test')",
+            movie_id,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let file_id = Uuid::now_v7();
+        sqlx::query!(
+            r#"INSERT INTO media_files (id, movie_id, file_path, workflow_state, transcode_spec)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            file_id,
+            movie_id,
+            format!("/tmp/cur_{file_id}.mkv"),
+            state as WorkflowStateTag,
+            spec,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        (movie_id, file_id)
+    }
+
+    async fn insert_retention(pool: &PgPool, file_id: Uuid, retained_path: &str) {
+        sqlx::query!(
+            r#"INSERT INTO retention_files (media_file_id, retained_path, original_size_bytes)
+               VALUES ($1, $2, $3)"#,
+            file_id,
+            retained_path,
+            1_000_000i64,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn file_state(pool: &PgPool, id: Uuid) -> String {
+        sqlx::query_scalar!(
+            r#"SELECT workflow_state::text as "s!" FROM media_files WHERE id = $1"#,
+            id,
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn requeue_quality_skips_flips_only_eligible() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+
+        // Skipped with a recorded VMAF at/above the (lowered) threshold.
+        let (m_ok, f_ok) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Skipped,
+            Some(serde_json::json!({ "crf": 24, "vmaf": 95.0 })),
+        )
+        .await;
+        // Below the new threshold -> must stay skipped.
+        let (m_low, f_low) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Skipped,
+            Some(serde_json::json!({ "crf": 24, "vmaf": 80.0 })),
+        )
+        .await;
+        // Skipped without a VMAF (e.g. insufficient size reduction) -> untouched.
+        let (m_no, f_no) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Skipped,
+            Some(serde_json::json!({ "crf": 24 })),
+        )
+        .await;
+        // Already done with a high VMAF -> not a skip, untouched.
+        let (m_done, f_done) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Done,
+            Some(serde_json::json!({ "crf": 24, "vmaf": 99.0 })),
+        )
+        .await;
+
+        let ids = store.requeue_quality_skips(90.0).await.unwrap();
+
+        assert!(
+            ids.iter().any(|id| id.as_uuid() == f_ok),
+            "eligible file must be requeued"
+        );
+        for f in [f_low, f_no, f_done] {
+            assert!(
+                !ids.iter().any(|id| id.as_uuid() == f),
+                "ineligible file must not be requeued"
+            );
+        }
+
+        assert_eq!(file_state(&pool, f_ok).await, "transcoding");
+        assert_eq!(file_state(&pool, f_low).await, "skipped");
+        assert_eq!(file_state(&pool, f_no).await, "skipped");
+        assert_eq!(file_state(&pool, f_done).await, "done");
+
+        for id in [m_ok, m_low, m_no, m_done] {
+            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn fetch_done_files_missing_vmaf_filters_correctly() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+
+        // done + retention + no vmaf -> included.
+        let (m_inc, f_inc) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Done,
+            Some(serde_json::json!({ "crf": 24 })),
+        )
+        .await;
+        insert_retention(&pool, f_inc, &format!("/tmp/orig_{f_inc}.mkv")).await;
+        // done + retention + has vmaf -> excluded (already scored).
+        let (m_scored, f_scored) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Done,
+            Some(serde_json::json!({ "crf": 24, "vmaf": 97.0 })),
+        )
+        .await;
+        insert_retention(&pool, f_scored, "/tmp/orig_scored.mkv").await;
+        // done, no retention row -> excluded (original already reaped).
+        let (m_noret, f_noret) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Done,
+            Some(serde_json::json!({ "crf": 24 })),
+        )
+        .await;
+        // skipped + retention -> excluded (wrong state).
+        let (m_skip, f_skip) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Skipped,
+            Some(serde_json::json!({ "crf": 24 })),
+        )
+        .await;
+        insert_retention(&pool, f_skip, "/tmp/orig_skip.mkv").await;
+
+        let rows = store.fetch_done_files_missing_vmaf().await.unwrap();
+
+        let found = rows
+            .iter()
+            .find(|(id, _, _)| id.as_uuid() == f_inc)
+            .expect("done file lacking vmaf with retention must be returned");
+        assert_eq!(found.1, format!("/tmp/orig_{f_inc}.mkv"), "retained original");
+        assert_eq!(found.2, format!("/tmp/cur_{f_inc}.mkv"), "current transcoded");
+
+        for f in [f_scored, f_noret, f_skip] {
+            assert!(
+                !rows.iter().any(|(id, _, _)| id.as_uuid() == f),
+                "filtered file must be absent"
+            );
+        }
+
+        for id in [m_inc, m_scored, m_noret, m_skip] {
             sqlx::query!("DELETE FROM movies WHERE id = $1", id)
                 .execute(&pool)
                 .await
