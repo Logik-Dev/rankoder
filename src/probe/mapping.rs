@@ -68,6 +68,15 @@ impl TryFrom<FfprobeOutput> for VideoProperties {
 
         let color_metadata = extract_color_metadata(video_stream);
 
+        // Dolby Vision: the DOVI configuration record is a stream-level side
+        // data, so it's already in our `-show_streams` output. Its presence
+        // flags the file for skipping (a re-encode would strip the RPU).
+        let dv_profile = video_stream
+            .side_data_list
+            .iter()
+            .find(|sd| sd.side_data_type == "DOVI configuration record")
+            .and_then(|sd| sd.dv_profile);
+
         Ok(Self {
             video_codec,
             resolution,
@@ -76,6 +85,7 @@ impl TryFrom<FfprobeOutput> for VideoProperties {
             size_bytes,
             duration,
             color_metadata,
+            dv_profile,
         })
     }
 }
@@ -203,6 +213,63 @@ mod tests {
             "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
         );
         assert_eq!(color.max_cll.unwrap(), "1000,400");
+    }
+
+    #[test]
+    fn dolby_vision_profile_detected() {
+        let json = r#"{
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 3840,
+                    "height": 2160,
+                    "bit_rate": "30000000",
+                    "avg_frame_rate": "24000/1001",
+                    "side_data_list": [
+                        {
+                            "side_data_type": "DOVI configuration record",
+                            "dv_profile": 8,
+                            "dv_level": 6,
+                            "rpu_present_flag": 1,
+                            "el_present_flag": 0,
+                            "bl_present_flag": 1
+                        }
+                    ]
+                }
+            ],
+            "format": {
+                "duration": "3600.000000",
+                "size": "60000000000",
+                "bit_rate": "30000000"
+            }
+        }"#;
+
+        let probe: FfprobeOutput = serde_json::from_str(json).unwrap();
+        let vp: VideoProperties = probe.try_into().unwrap();
+
+        assert_eq!(vp.dv_profile, Some(8));
+    }
+
+    #[test]
+    fn non_dv_has_no_profile() {
+        let json = r#"{
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "hevc",
+                    "width": 1920,
+                    "height": 1080,
+                    "avg_frame_rate": "24000/1001"
+                }
+            ],
+            "format": { "duration": "3600.0", "size": "10000000000" }
+        }"#;
+
+        let probe: FfprobeOutput = serde_json::from_str(json).unwrap();
+        let vp: VideoProperties = probe.try_into().unwrap();
+
+        assert_eq!(vp.dv_profile, None);
     }
 
     #[test]

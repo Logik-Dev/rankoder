@@ -110,7 +110,7 @@ impl MediaStore {
             MediaFileRow,
             r#"
                 SELECT id, episode_id, movie_id, file_path, size_bytes, video_codec, height,
-                width, bitrate_kbps, framerate, duration_seconds, transcode_spec,
+                width, bitrate_kbps, framerate, duration_seconds, dv_profile, transcode_spec,
                 workflow_state as "workflow_state: WorkflowStateTag"
                 FROM media_files
                 WHERE id = $1
@@ -145,8 +145,9 @@ impl MediaStore {
             r#"
                 UPDATE media_files
                 SET size_bytes = $1, video_codec = $2, height = $3, width = $4,
-                    bitrate_kbps = $5, framerate = $6, duration_seconds = $7, workflow_state = $8
-                WHERE id = $9 AND workflow_state = $10
+                    bitrate_kbps = $5, framerate = $6, duration_seconds = $7,
+                    dv_profile = $8, workflow_state = $9
+                WHERE id = $10 AND workflow_state = $11
             "#,
             video_properties.size_bytes.as_u64() as i64,
             video_properties.video_codec.as_ref(),
@@ -155,6 +156,7 @@ impl MediaStore {
             video_properties.bitrate.as_ref().map(|b| b.as_bps() as i32),
             video_properties.framerate.as_ref().map(|f| f.to_string()),
             video_properties.duration.as_ref().map(|d| d.as_secs_f64()),
+            video_properties.dv_profile.map(|p| p as i16),
             WorkflowStateTag::Probed as WorkflowStateTag,
             media_file_id.as_uuid(),
             WorkflowStateTag::Discovered as WorkflowStateTag,

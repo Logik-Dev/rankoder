@@ -61,6 +61,10 @@ pub struct VideoProperties {
     pub size_bytes: SizeBytes,
     pub duration: Option<DurationSecs>,
     pub color_metadata: Option<ColorMetadata>,
+    /// Dolby Vision profile (e.g. 5, 7, 8) when the stream carries a DOVI
+    /// configuration record; `None` for non-DV files. Its presence makes the
+    /// analysis skip the file — a normal re-encode strips the DV RPU.
+    pub dv_profile: Option<u8>,
 }
 
 impl VideoProperties {

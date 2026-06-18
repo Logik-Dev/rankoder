@@ -10,6 +10,7 @@ pub enum SkipReason {
     MissingProbeData,
     InsufficientSizeReduction,
     QualityTooLow,
+    DolbyVision,
 }
 
 #[derive(Debug)]

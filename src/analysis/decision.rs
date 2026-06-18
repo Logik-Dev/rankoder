@@ -42,6 +42,15 @@ impl TakeTranscodeDecisionService {
             return TranscodeDecision::Skip(SkipReason::MissingProbeData);
         };
 
+        // Dolby Vision first: a normal re-encode strips the DV RPU and degrades
+        // playback (washed-out/wrong colors, especially profile 5), so DV is
+        // never transcoded until proper RPU handling exists. Checked before the
+        // codec/bpp gates so the skip reason is always reported as DolbyVision.
+        if let Some(profile) = vp.dv_profile {
+            debug!(profile, "skipping Dolby Vision file");
+            return TranscodeDecision::Skip(SkipReason::DolbyVision);
+        }
+
         if !vp.video_codec.needs_transcoding() {
             return TranscodeDecision::Skip(SkipReason::ExcludedCodec);
         }
@@ -126,5 +135,61 @@ fn resolution_factor(height: u32, width: u32) -> f32 {
         p if p >= 1920 * 1080 => 1.5,
         p if p >= 1280 * 720 => 1.0,
         _ => 0.6,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{
+        common::AbsoluteFilePath,
+        media_file::{MediaFile, MediaFileId, SizeBytes},
+        video::{Resolution, VideoProperties},
+        workflow::WorkflowStateTag,
+    };
+
+    fn file_with(dv_profile: Option<u8>, codec: &str) -> MediaFile {
+        MediaFile {
+            id: MediaFileId::new(),
+            episode_id: None,
+            movie_id: None,
+            path: AbsoluteFilePath::new("/tmp/dv_test.mkv").unwrap(),
+            video_properties: Some(VideoProperties {
+                video_codec: codec.parse().unwrap(),
+                resolution: Resolution::new(2160, 3840).unwrap(),
+                bitrate: None,
+                framerate: None,
+                size_bytes: SizeBytes::new(50_000_000_000).unwrap(),
+                duration: None,
+                color_metadata: None,
+                dv_profile,
+            }),
+            transcode_spec: None,
+            workflow_state: WorkflowStateTag::Probed,
+        }
+    }
+
+    fn service() -> TakeTranscodeDecisionService {
+        TakeTranscodeDecisionService::new(2.0, 0.04, 0.15, 1.0)
+    }
+
+    #[test]
+    fn dolby_vision_is_skipped() {
+        let decision = service().execute(&file_with(Some(5), "hevc"), None);
+        assert!(matches!(
+            decision,
+            TranscodeDecision::Skip(SkipReason::DolbyVision)
+        ));
+    }
+
+    #[test]
+    fn dolby_vision_skip_precedes_excluded_codec() {
+        // AV1 alone would be ExcludedCodec, but DV must win so the affected
+        // population is counted accurately.
+        let decision = service().execute(&file_with(Some(5), "av1"), None);
+        assert!(matches!(
+            decision,
+            TranscodeDecision::Skip(SkipReason::DolbyVision)
+        ));
     }
 }

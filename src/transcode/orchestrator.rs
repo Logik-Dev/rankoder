@@ -730,6 +730,7 @@ mod tests {
                 size_bytes: SizeBytes::new(declared_size).unwrap(),
                 duration: Some(DurationSecs::new(duration_secs).unwrap()),
                 color_metadata: None,
+                dv_profile: None,
             }),
             transcode_spec: crf.map(|c| serde_json::json!({ "crf": c })),
             workflow_state: WorkflowStateTag::Transcoding,

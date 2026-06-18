@@ -69,6 +69,8 @@ impl TryFrom<(MediaFileRow, Option<ColorMetadataRow>)> for MediaFile {
 
         let color_metadata = color_row.as_ref().and_then(color_md_from_row);
 
+        let dv_profile = value.dv_profile.map(|p| p as u8);
+
         let video_properties = match (video_codec, resolution, size_bytes) {
             (Some(video_codec), Some(resolution), Some(size_bytes)) => Some(VideoProperties {
                 video_codec,
@@ -78,6 +80,7 @@ impl TryFrom<(MediaFileRow, Option<ColorMetadataRow>)> for MediaFile {
                 framerate,
                 duration,
                 color_metadata,
+                dv_profile,
             }),
             _ => None,
         };

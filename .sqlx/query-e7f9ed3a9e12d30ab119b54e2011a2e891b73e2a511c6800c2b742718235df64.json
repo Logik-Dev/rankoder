@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO media_files (id, movie_id, file_path, workflow_state, transcode_spec)\n               VALUES ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        {
+          "Custom": {
+            "name": "workflow_state",
+            "kind": {
+              "Enum": [
+                "discovered",
+                "probed",
+                "analyzed",
+                "pending_approval",
+                "transcoding",
+                "done",
+                "skipped",
+                "failed"
+              ]
+            }
+          }
+        },
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e7f9ed3a9e12d30ab119b54e2011a2e891b73e2a511c6800c2b742718235df64"
+}

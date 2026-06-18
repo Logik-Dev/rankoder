@@ -70,4 +70,6 @@ pub(super) struct SideData {
     // Content light level
     pub max_content: Option<u16>,
     pub max_average: Option<u16>,
+    // Dolby Vision (side_data_type "DOVI configuration record")
+    pub dv_profile: Option<u8>,
 }
