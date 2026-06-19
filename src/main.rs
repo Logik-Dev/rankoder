@@ -157,6 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.transcode_min_size_reduction,
         cfg.min_vmaf,
         cfg.vmaf_n_subsample,
+        cfg.vmaf_n_threads,
         MediaNotifiers {
             movie: movie_notifier,
             series: series_notifier,
@@ -211,6 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(maintenance::run_vmaf_backfill(
             store.clone(),
             cfg.vmaf_n_subsample,
+            cfg.vmaf_n_threads,
             token.child_token(),
         ));
     }

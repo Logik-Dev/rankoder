@@ -33,6 +33,7 @@ pub struct AppConfig {
     pub transcode_retention_days: i32,
     pub min_vmaf: f64,
     pub vmaf_n_subsample: u32,
+    pub vmaf_n_threads: usize,
     pub backfill_vmaf: bool,
     pub requeue_quality_skips: bool,
     pub radarr_url: Option<String>,
@@ -75,6 +76,10 @@ impl AppConfig {
             // never reject, so the threshold can be calibrated from real data.
             min_vmaf: parse_env("MIN_VMAF", 0.0)?,
             vmaf_n_subsample: parse_env("VMAF_N_SUBSAMPLE", 5)?,
+            // libvmaf is single-threaded by default and dominates the measure
+            // cost; threading it is a ~3x win. Capped (default 6) so it leaves
+            // cores free for the host rather than grabbing every CPU.
+            vmaf_n_threads: parse_env("VMAF_N_THREADS", 6)?,
             // One-shot maintenance flags, read at startup. Both are idempotent,
             // but documented as set -> run once -> unset.
             backfill_vmaf: parse_bool_env("BACKFILL_VMAF", false)?,

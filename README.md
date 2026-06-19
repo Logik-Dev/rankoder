@@ -309,6 +309,7 @@ only what you need:
 | `TRANSCODE_MIN_SIZE_REDUCTION` | `0.1` | Reject an encode that isn't at least this much smaller |
 | `MIN_VMAF` | `0.0` | Post-encode VMAF gate. `0` = observe only (measure + record, never reject); set > 0 to reject encodes below it |
 | `VMAF_N_SUBSAMPLE` | `5` | Evaluate 1 frame out of N for VMAF (cost vs precision) |
+| `VMAF_N_THREADS` | `6` | Threads for libvmaf (single-threaded otherwise → ~3x faster). Capped to leave cores for the host; `0` lets libvmaf decide |
 
 The VMAF score is recorded under `transcode_spec.vmaf` for **every** attempt
 (accepted or rejected), so the threshold can be calibrated from the real

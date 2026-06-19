@@ -17,7 +17,12 @@ use crate::transcode::vmaf;
 /// and skipped. Runs sequentially so it never starves live transcodes of CPU,
 /// and checks the cancellation token between files for a clean shutdown.
 #[instrument(skip_all)]
-pub async fn run_vmaf_backfill(store: Arc<MediaStore>, n_subsample: u32, token: CancellationToken) {
+pub async fn run_vmaf_backfill(
+    store: Arc<MediaStore>,
+    n_subsample: u32,
+    n_threads: usize,
+    token: CancellationToken,
+) {
     let files = match store.fetch_done_files_missing_vmaf().await {
         Ok(f) => f,
         Err(e) => {
@@ -40,7 +45,9 @@ pub async fn run_vmaf_backfill(store: Arc<MediaStore>, n_subsample: u32, token: 
             return;
         }
 
-        match vmaf::compute_vmaf(Path::new(&original), Path::new(&transcoded), n_subsample).await {
+        match vmaf::compute_vmaf(Path::new(&original), Path::new(&transcoded), n_subsample, n_threads)
+            .await
+        {
             Ok(score) => {
                 if let Err(e) = store.record_vmaf(&id, score).await {
                     warn!(%e, ?id, "vmaf backfill: failed to record score");

@@ -45,22 +45,32 @@ fn parse_vmaf_log(json: &str) -> Result<f64, VmafError> {
 /// Both inputs are assumed to share the same resolution — rankoder never
 /// rescales — so no scaling is needed; we only align the pixel format so 8-bit
 /// and 10-bit sources are comparable. `n_subsample` evaluates one frame out of
-/// every N to bound the cost (1 = every frame).
+/// every N to bound the cost (1 = every frame). `n_threads` parallelizes
+/// libvmaf, which is single-threaded by default and otherwise dominates the
+/// measure time (≈3x faster with several threads); capped by the caller to
+/// leave cores for the host. 0 lets libvmaf decide.
 pub async fn compute_vmaf(
     original: &Path,
     transcoded: &Path,
     n_subsample: u32,
+    n_threads: usize,
 ) -> Result<f64, VmafError> {
     let n_subsample = n_subsample.max(1);
     let log_path = transcoded.with_extension("vmaf.json");
 
     // First input (transcoded) is the distorted stream, second (original) the
     // reference, as libvmaf expects.
+    let threads_opt = if n_threads > 0 {
+        format!(":n_threads={n_threads}")
+    } else {
+        String::new()
+    };
     let filtergraph = format!(
         "[0:v]format=yuv420p10le[dist];[1:v]format=yuv420p10le[ref];\
-         [dist][ref]libvmaf=log_fmt=json:log_path={}:n_subsample={}",
+         [dist][ref]libvmaf=log_fmt=json:log_path={}:n_subsample={}{}",
         log_path.display(),
         n_subsample,
+        threads_opt,
     );
 
     let output = Command::new("ffmpeg")

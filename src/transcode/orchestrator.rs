@@ -54,6 +54,7 @@ pub struct TranscodeOrchestrator {
     min_size_reduction: f64,
     min_vmaf: f64,
     vmaf_n_subsample: u32,
+    vmaf_n_threads: usize,
     notifiers: MediaNotifiers,
 }
 
@@ -68,6 +69,7 @@ impl TranscodeOrchestrator {
         min_size_reduction: f64,
         min_vmaf: f64,
         vmaf_n_subsample: u32,
+        vmaf_n_threads: usize,
         notifiers: MediaNotifiers,
     ) -> Self {
         Self {
@@ -79,6 +81,7 @@ impl TranscodeOrchestrator {
             min_size_reduction,
             min_vmaf,
             vmaf_n_subsample,
+            vmaf_n_threads,
             notifiers,
         }
     }
@@ -103,6 +106,7 @@ impl TranscodeOrchestrator {
         let min_size_reduction = self.min_size_reduction;
         let min_vmaf = self.min_vmaf;
         let vmaf_n_subsample = self.vmaf_n_subsample;
+        let vmaf_n_threads = self.vmaf_n_threads;
         let notifiers = self.notifiers;
         let mut rx = self.rx;
 
@@ -153,6 +157,7 @@ impl TranscodeOrchestrator {
                     let msr = min_size_reduction;
                     let mv = min_vmaf;
                     let ns = vmaf_n_subsample;
+                    let nt = vmaf_n_threads;
                     let n = notifiers.clone();
 
                     join_set.spawn(async move {
@@ -160,7 +165,8 @@ impl TranscodeOrchestrator {
                         // actually serializes transcoding.
                         let _permit = permit;
                         if let Err(e) =
-                            Self::process_file(s, enc, &t, &r, msr, mv, ns, n, media_file_id).await
+                            Self::process_file(s, enc, &t, &r, msr, mv, ns, nt, n, media_file_id)
+                                .await
                         {
                             error!(%e, ?media_file_id, "transcode failed");
                         }
@@ -197,6 +203,7 @@ impl TranscodeOrchestrator {
         min_size_reduction: f64,
         min_vmaf: f64,
         vmaf_n_subsample: u32,
+        vmaf_n_threads: usize,
         media_file: &MediaFile,
     ) -> Result<TranscodeOutcome, TranscodeError> {
         let media_file_id = media_file.id;
@@ -334,7 +341,10 @@ impl TranscodeOrchestrator {
         // only kicks in when min_vmaf > 0 ("observe only" otherwise). A
         // measurement failure must not throw away a good encode, so we log and
         // proceed without a score.
-        let vmaf = match vmaf::compute_vmaf(&original_path, &temp_path, vmaf_n_subsample).await {
+        let vmaf =
+            match vmaf::compute_vmaf(&original_path, &temp_path, vmaf_n_subsample, vmaf_n_threads)
+                .await
+            {
             Ok(score) => {
                 info!(?media_file_id, vmaf = %score, "vmaf measured");
                 Some(score)
@@ -394,6 +404,7 @@ impl TranscodeOrchestrator {
         min_size_reduction: f64,
         min_vmaf: f64,
         vmaf_n_subsample: u32,
+        vmaf_n_threads: usize,
         notifiers: MediaNotifiers,
         media_file_id: MediaFileId,
     ) -> Result<()> {
@@ -406,6 +417,7 @@ impl TranscodeOrchestrator {
             min_size_reduction,
             min_vmaf,
             vmaf_n_subsample,
+            vmaf_n_threads,
             &media_file,
         )
         .await
@@ -769,6 +781,7 @@ mod tests {
             0.05,
             0.0,
             1,
+            1,
             &mf,
         )
         .await
@@ -808,6 +821,7 @@ mod tests {
             &ws.retention,
             0.1,
             0.0,
+            1,
             1,
             &mf,
         )
@@ -851,6 +865,7 @@ mod tests {
             0.05,
             0.0,
             1,
+            1,
             &mf,
         )
         .await
@@ -876,6 +891,7 @@ mod tests {
             &ws.retention,
             0.05,
             0.0,
+            1,
             1,
             &mf,
         )
@@ -1013,6 +1029,7 @@ mod tests {
             0.05,
             0.0,
             1,
+            1,
             MediaNotifiers::default(),
             id,
         )
@@ -1056,6 +1073,7 @@ mod tests {
             &ws.retention,
             0.1,
             0.0,
+            1,
             1,
             MediaNotifiers::default(),
             id,
@@ -1101,6 +1119,7 @@ mod tests {
             &ws.retention,
             0.05,
             0.0,
+            1,
             1,
             MediaNotifiers::default(),
             id,
