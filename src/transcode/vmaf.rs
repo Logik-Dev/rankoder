@@ -44,7 +44,9 @@ fn parse_vmaf_log(json: &str) -> Result<f64, VmafError> {
 ///
 /// Both inputs are assumed to share the same resolution — rankoder never
 /// rescales — so no scaling is needed; we only align the pixel format so 8-bit
-/// and 10-bit sources are comparable. `n_subsample` evaluates one frame out of
+/// and 10-bit sources are comparable, and re-zero each stream's PTS so libvmaf
+/// pairs frame-for-frame (see the filtergraph comment below). `n_subsample`
+/// evaluates one frame out of
 /// every N to bound the cost (1 = every frame). `n_threads` parallelizes
 /// libvmaf, which is single-threaded by default and otherwise dominates the
 /// measure time (≈3x faster with several threads); capped by the caller to
@@ -65,8 +67,15 @@ pub async fn compute_vmaf(
     } else {
         String::new()
     };
+    // `setpts=PTS-STARTPTS` rebases both streams to a zero start timestamp before
+    // libvmaf's framesync pairs them. Without it, a sub-frame start_pts offset
+    // between source and transcode (e.g. a 5ms container delay on the original)
+    // makes framesync pair frame N against frame N-1 for the whole file: every
+    // frame but the first is misaligned, collapsing the pooled VMAF to ~40-60
+    // even when the encode is actually ~96. Re-zeroing the PTS realigns them.
     let filtergraph = format!(
-        "[0:v]format=yuv420p10le[dist];[1:v]format=yuv420p10le[ref];\
+        "[0:v]setpts=PTS-STARTPTS,format=yuv420p10le[dist];\
+         [1:v]setpts=PTS-STARTPTS,format=yuv420p10le[ref];\
          [dist][ref]libvmaf=log_fmt=json:log_path={}:n_subsample={}{}",
         log_path.display(),
         n_subsample,
