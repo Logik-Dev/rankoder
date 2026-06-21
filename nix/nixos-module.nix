@@ -180,6 +180,22 @@ in
       '';
     };
 
+    minVmaf = lib.mkOption {
+      type = lib.types.float;
+      default = 0.0;
+      example = 92.0;
+      description = ''
+        Post-encode VMAF quality gate (MIN_VMAF). `0.0` (the default) is
+        observe-only: the score is always measured and stored under
+        `transcode_spec.vmaf`, but never rejects an encode. Set above `0` to
+        reject encodes scoring below it (`skipped` / `QualityTooLow`). Calibrate
+        from the recorded distribution before enforcing; a healthy h264->HEVC
+        encode pools around 95-97, so a threshold near 92 gates real regressions
+        without false rejects. Lowering it later pairs with
+        {option}`requeueQualitySkips` to re-encode files that now clear the bar.
+      '';
+    };
+
     backfillVmaf = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -260,6 +276,7 @@ in
         TRANSCODE_TMP_DIR = cfg.tmpDir;
         TRANSCODE_RETENTION_DIR = cfg.retentionDir;
         TRANSCODE_RETENTION_DAYS = toString cfg.retentionDays;
+        MIN_VMAF = toString cfg.minVmaf;
         RUST_LOG = cfg.logLevel;
       }
       // lib.optionalAttrs (cfg.radarrUrl != null) { RADARR_URL = cfg.radarrUrl; }
