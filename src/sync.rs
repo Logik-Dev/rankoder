@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::{
     models::{
@@ -79,20 +79,31 @@ where
         info!("start syncing episodes library");
 
         let mut drafts = Vec::new();
+        let mut skipped = 0usize;
         for item in raw {
             let Some(jellyfin_series_id) = item.parent_id() else {
                 debug!("skipping episode without series_id");
+                skipped += 1;
                 continue;
             };
             let Some(series_id) = series_map.get(jellyfin_series_id) else {
                 debug!(%jellyfin_series_id, "skipping episode referencing unknown series");
+                skipped += 1;
                 continue;
             };
             let Ok(draft) = self.series_provider.map_to_episode_draft(item, series_id) else {
                 debug!("skipping invalid episode");
+                skipped += 1;
                 continue;
             };
             drafts.push(draft);
+        }
+        // Per-item reasons are logged at debug; surface only the aggregate so an
+        // operator sees the magnitude without the per-episode noise. Common
+        // cause: episodes Jellyfin returns without a season/episode number
+        // (non-SxxEyy library structures).
+        if skipped > 0 {
+            warn!(skipped, "episodes skipped (missing series link or season/episode number)");
         }
         let count = drafts.len();
         self.store.insert_episodes_batched(&drafts, 500).await?;

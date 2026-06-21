@@ -291,6 +291,7 @@ Add the flake as an input and import the module:
 | `autoMigrate` | `true` | Run migrations at startup |
 | `hardwareAcceleration` | `false` | Grant the GPU: `/dev/dri` (VAAPI/QSV) + `/dev/nvidia*` (NVENC) + video/render groups |
 | `logLevel` | `info` | `RUST_LOG` / tracing filter |
+| `minVmaf` | `0.0` | Post-encode VMAF quality gate (`MIN_VMAF`). `0` = observe only (measure + record, never reject); set > 0 (e.g. `92`) to reject encodes below it |
 | `backfillVmaf` | `false` | One-shot: score `done` files that predate the VMAF gate (`BACKFILL_VMAF`). Enable → deploy once → disable |
 | `requeueQualitySkips` | `false` | One-shot: re-encode `QualityTooLow` skips that now clear `MIN_VMAF` (`REQUEUE_QUALITY_SKIPS`). Enable → deploy once → disable |
 | `settings` | `{}` | Extra env vars (override the above) — see Analysis & quality tuning |
@@ -307,7 +308,7 @@ only what you need:
 | `MIN_COMPRESSION_POTENTIAL` | `1.0` | Resolution-aware headroom gate |
 | `MIN_ANALYSIS_SIZE_PER_HOUR_GB` | `2.0` | Skip files below this size/hour |
 | `TRANSCODE_MIN_SIZE_REDUCTION` | `0.1` | Reject an encode that isn't at least this much smaller |
-| `MIN_VMAF` | `0.0` | Post-encode VMAF gate. `0` = observe only (measure + record, never reject); set > 0 to reject encodes below it |
+| `MIN_VMAF` | `0.0` | Post-encode VMAF gate. `0` = observe only (measure + record, never reject); set > 0 to reject encodes below it. Also exposed as the first-class `minVmaf` option above |
 | `VMAF_N_SUBSAMPLE` | `5` | Evaluate 1 frame out of N for VMAF (cost vs precision) |
 | `VMAF_N_THREADS` | `6` | Threads for libvmaf (single-threaded otherwise → ~3x faster). Capped to leave cores for the host; `0` lets libvmaf decide |
 
@@ -342,3 +343,58 @@ SELECT count(*)
 FROM media_files mf JOIN retention_files rf ON rf.media_file_id = mf.id
 WHERE mf.workflow_state = 'done' AND NOT (mf.transcode_spec ? 'vmaf');
 ```
+
+## Roadmap
+
+Ordered by priority. The first items close out the current VMAF work; the later
+ones open new fronts.
+
+### Near-term
+
+1. **Enable the VMAF quality gate.** The measurement is now trustworthy (frame
+   PTS aligned, log path made filename-safe) and the recorded distribution is
+   clean (~94–97). Finish the backfill rattrapage, then set `minVmaf ≈ 92` to
+   move the gate from *observe* to *protect* for new transcodes.
+2. **Stats UI (phase 1).** A read-only dashboard for the data already in
+   Postgres (`space_saved_gb`, VMAF distribution, per-state counts). Grafana on
+   Postgres behind the existing reverse-proxy — no Rust changes.
+3. **Maintenance UI (phase 2).** An HTTP API inside the binary (axum) + an
+   Angular SPA to drive operations on demand — requeue, force-skip, trigger a
+   backfill, inspect/retry `failed` — replacing the one-shot env flags and
+   NixOS rebuilds.
+
+### Codec coverage
+
+4. **Dolby Vision (RPU handling).** DV is currently *skipped* (`dv_profile` set,
+   `SkipReason::DolbyVision`) because a naive re-encode strips the RPU. Extract
+   and re-inject the RPU with `dovi_tool` to bring this population — counted via
+   `SELECT dv_profile, count(*) … WHERE dv_profile IS NOT NULL` — back in scope.
+   The only item that *grows* the addressable savings.
+5. **HDR10+ dynamic metadata.** Today it falls back to static HDR10. Preserving
+   the dynamic metadata is complex for a small population — backlog.
+
+### Ideas / backlog
+
+Not yet prioritised — candidates to make rankoder more useful, resilient or
+interesting:
+
+- **Quality-targeted encoding.** Replace the fixed CRF + post-hoc gate with a
+  short CRF search that lands on a *target* VMAF. Maximises savings while
+  guaranteeing quality, instead of discovering a bad encode only after the fact.
+- **Transcode scheduling / quiet hours.** Restrict encoding to off-peak windows
+  (or pause via an MQTT command topic) so it never competes with Jellyfin
+  playback for CPU/GPU.
+- **Auto-retry transient failures.** Distinguish transient (I/O, NFS, GPU busy)
+  from permanent failures and retry with backoff instead of leaving the file
+  `failed`.
+- **Pre-flight free-space check.** Verify `tmpDir` has room for the encode
+  before starting; fail fast and clearly instead of mid-encode.
+- **systemd watchdog.** `sd_notify` heartbeat + `WatchdogSec` so a hung ffmpeg
+  restarts the service rather than stalling the pipeline silently.
+- **AV1 output.** Optionally target AV1 (SVT-AV1 / NVENC AV1) for extra savings
+  on capable content, alongside HEVC.
+- **Per-frame VMAF floor.** Record the min / low-percentile VMAF, not just the
+  pooled mean, to catch localised quality dips that a healthy average hides.
+- **Dry-run savings report.** Analyse the whole library and emit a
+  projected-savings report without transcoding — to size the opportunity before
+  committing.

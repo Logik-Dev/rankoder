@@ -53,7 +53,12 @@ impl SeriesProvider for JellyfinProvider {
         })
     }
 
-    #[instrument(skip(self), err, fields(name = %item.name), level = "debug")]
+    // `err(level = "debug")`: a mapping failure here is an expected, recoverable
+    // per-item skip (e.g. Jellyfin returns an episode with no season number for
+    // non-SxxEyy libraries like Kaamelott's "Livre" layout). The default `err`
+    // logs every such case at ERROR, flooding each sync with dozens of scary
+    // lines for something benign; the caller aggregates the count into one warn.
+    #[instrument(skip(self), err(level = "debug"), fields(name = %item.name), level = "debug")]
     fn map_to_episode_draft(
         &self,
         item: JellyfinItem,
