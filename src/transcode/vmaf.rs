@@ -58,7 +58,14 @@ pub async fn compute_vmaf(
     n_threads: usize,
 ) -> Result<f64, VmafError> {
     let n_subsample = n_subsample.max(1);
-    let log_path = transcoded.with_extension("vmaf.json");
+    // The log path is embedded in the filtergraph, where ffmpeg treats `'`, `:`,
+    // `,` and friends as syntax. Deriving it from the media filename broke on
+    // titles like "Marvel's …": the apostrophe truncated libvmaf's `log_path`
+    // option, ffmpeg still exited 0, but the log landed elsewhere and the read
+    // below failed with "No such file". Use a controlled temp path with no
+    // special characters, unique per call (removed once parsed, below).
+    let log_path =
+        std::env::temp_dir().join(format!("rankoder-vmaf-{}.json", uuid::Uuid::new_v4()));
 
     // First input (transcoded) is the distorted stream, second (original) the
     // reference, as libvmaf expects.
