@@ -10,6 +10,7 @@ topics/payloads, DB migrations) rather than a Rust API.
 
 ### Features
 
+- **notification:** Surface the running version
 - **sync:** Periodic + webhook-triggered library re-sync
 - **nix:** Expose minVmaf module option for the VMAF quality gate
 - **analysis:** Detect Dolby Vision and skip it instead of degrading
