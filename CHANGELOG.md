@@ -6,6 +6,12 @@ its *operational contract* (NixOS module options, environment variables, MQTT
 topics/payloads, DB migrations) rather than a Rust API.
 
 
+## [0.2.1] - 2026-06-22
+
+### Bug Fixes
+
+- **nix:** Include the dashboard css in the crane source filter
+
 ## [0.2.0] - 2026-06-22
 
 ### Breaking
