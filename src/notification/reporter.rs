@@ -92,6 +92,7 @@ impl StatusReporter {
         let last_failure = self.store.fetch_last_failure().await?.map(to_alert);
 
         let mut snapshot = StatusSnapshot {
+            version: env!("CARGO_PKG_VERSION").to_string(),
             space_saved_gb: saved_bytes as f64 / BYTES_PER_GB,
             last_failure,
             ..Default::default()

@@ -46,6 +46,8 @@ mod workflow;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _guard = init_tracing();
 
+    info!(version = env!("CARGO_PKG_VERSION"), "starting rankoder");
+
     let cfg = AppConfig::from_env()?;
 
     // Cover the workflow's worker pool (available_parallelism) plus the

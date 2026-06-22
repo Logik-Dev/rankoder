@@ -46,6 +46,9 @@ pub struct FailureAlert {
 /// the current state survives restarts and is always queryable.
 #[derive(Debug, Default, Serialize)]
 pub struct StatusSnapshot {
+    /// Running rankoder version (`CARGO_PKG_VERSION`), so the deployed build is
+    /// visible from Home Assistant without shelling into the host.
+    pub version: String,
     pub discovered: i64,
     pub probed: i64,
     pub analyzed: i64,

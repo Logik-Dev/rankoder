@@ -74,7 +74,7 @@ Everything operator-facing goes through one MQTT connection, under `rankoder/`:
 | `rankoder/approval/request` | out | 1 | no | `{ batch_id, title, file_count, total_size_gb, total_space_saved_gb, tmdb_rating }` |
 | `rankoder/approval/response` | in | 1 | no | `{ batch_id, approved }` |
 | `rankoder/failure` | out | 1 | no | `{ media_file_id, kind, title, reason }` |
-| `rankoder/status` | out | 1 | **yes** | `{ discovered, probed, analyzed, pending_approval, transcoding, done, skipped, failed, space_saved_gb, last_failure }` |
+| `rankoder/status` | out | 1 | **yes** | `{ version, discovered, probed, analyzed, pending_approval, transcoding, done, skipped, failed, space_saved_gb, last_failure }` |
 
 `rankoder/status` is retained and republished every 60s, so a fresh subscriber
 (e.g. Home Assistant restarting) immediately gets the current state.
