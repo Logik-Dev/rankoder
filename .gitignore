@@ -24,6 +24,7 @@
 # Nix
 .direnv/
 .envrc
+/result
 
 # OS
 .DS_Store

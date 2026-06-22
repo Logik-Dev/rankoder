@@ -33,8 +33,9 @@
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
           # crane's default source filter keeps only Cargo/Rust files; we also
-          # need the migrations (embedded by sqlx::migrate!) and the committed
-          # .sqlx/ offline query data (so the build needs no live database).
+          # need the migrations (embedded by sqlx::migrate!), the committed
+          # .sqlx/ offline query data (so the build needs no live database), and
+          # the dashboard assets embedded via include_str! (src/ui/*.css).
           src = pkgs.lib.cleanSourceWith {
             src = ./.;
             name = "rankoder-source";
@@ -42,7 +43,8 @@
               path: type:
               (craneLib.filterCargoSources path type)
               || (builtins.match ".*/migrations/.*\\.sql$" path != null)
-              || (builtins.match ".*/\\.sqlx/.*\\.json$" path != null);
+              || (builtins.match ".*/\\.sqlx/.*\\.json$" path != null)
+              || (builtins.match ".*/src/ui/.*\\.css$" path != null);
           };
 
           commonArgs = {
