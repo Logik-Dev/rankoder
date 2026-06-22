@@ -185,7 +185,9 @@ impl TranscodeOrchestrator {
 
         while let Some(res) = join_set.join_next().await {
             match res {
-                Ok(id) => { inflight.remove(&id); }
+                Ok(id) => {
+                    inflight.remove(&id);
+                }
                 Err(e) => error!("transcode worker task panicked: {e}"),
             }
         }
@@ -345,15 +347,15 @@ impl TranscodeOrchestrator {
             match vmaf::compute_vmaf(&original_path, &temp_path, vmaf_n_subsample, vmaf_n_threads)
                 .await
             {
-            Ok(score) => {
-                info!(?media_file_id, vmaf = %score, "vmaf measured");
-                Some(score)
-            }
-            Err(e) => {
-                warn!(%e, ?media_file_id, "vmaf measurement failed, proceeding without score");
-                None
-            }
-        };
+                Ok(score) => {
+                    info!(?media_file_id, vmaf = %score, "vmaf measured");
+                    Some(score)
+                }
+                Err(e) => {
+                    warn!(%e, ?media_file_id, "vmaf measurement failed, proceeding without score");
+                    None
+                }
+            };
 
         if min_vmaf > 0.0
             && let Some(score) = vmaf
@@ -450,8 +452,12 @@ impl TranscodeOrchestrator {
                     Self::notify_movie_manager(&store, notifiers.movie.as_deref(), &media_file_id)
                         .await;
                 } else if media_file.episode_id.is_some() {
-                    Self::notify_series_manager(&store, notifiers.series.as_deref(), &media_file_id)
-                        .await;
+                    Self::notify_series_manager(
+                        &store,
+                        notifiers.series.as_deref(),
+                        &media_file_id,
+                    )
+                    .await;
                 }
             }
             Ok(TranscodeOutcome::Skipped { reason, vmaf }) => {
@@ -1146,10 +1152,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl MovieNotifier for RecordingNotifier {
-        async fn refresh_movie(
-            &self,
-            tmdb_id: i32,
-        ) -> Result<(), crate::providers::ProviderError> {
+        async fn refresh_movie(&self, tmdb_id: i32) -> Result<(), crate::providers::ProviderError> {
             self.calls.lock().unwrap().push(tmdb_id);
             Ok(())
         }
@@ -1240,7 +1243,8 @@ mod tests {
 
         let movie_id = insert_movie_with_tmdb(&pool, 603).await;
         let id =
-            insert_transcoding_file(&pool, movie_id, Path::new("/tmp/notify.mkv"), 1_000, None).await;
+            insert_transcoding_file(&pool, movie_id, Path::new("/tmp/notify.mkv"), 1_000, None)
+                .await;
 
         let notifier = RecordingNotifier {
             calls: std::sync::Mutex::new(Vec::new()),

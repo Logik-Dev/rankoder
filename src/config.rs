@@ -36,6 +36,18 @@ pub struct AppConfig {
     pub vmaf_n_threads: usize,
     pub backfill_vmaf: bool,
     pub requeue_quality_skips: bool,
+    /// Periodic library re-sync cadence, in seconds. `0` disables the timer
+    /// (sync then only runs at startup and on external triggers).
+    pub sync_interval_secs: u64,
+    /// Debounce window (seconds) applied to webhook/MQTT triggers so a burst of
+    /// events (e.g. importing a whole season) collapses into a single sync.
+    pub sync_debounce_secs: u64,
+    /// `host:port` to bind the webhook HTTP server. Unset (or empty) disables
+    /// the server entirely. Defaults to loopback when only a port is intended.
+    pub webhook_bind: Option<String>,
+    /// Shared secret expected in the `X-Rankoder-Token` header on webhook calls.
+    /// Required whenever `webhook_bind` is set.
+    pub webhook_token: Option<String>,
     pub radarr_url: Option<String>,
     pub radarr_api_key: Option<String>,
     pub sonarr_url: Option<String>,
@@ -44,7 +56,7 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
-        Ok(Self {
+        let config = Self {
             jellyfin_url: env::var("JELLYFIN_URL")
                 .map_err(|_| ConfigError::Missing("JELLYFIN_URL".into()))?,
             jellyfin_api_key: env::var("JELLYFIN_API_KEY")
@@ -84,14 +96,34 @@ impl AppConfig {
             // but documented as set -> run once -> unset.
             backfill_vmaf: parse_bool_env("BACKFILL_VMAF", false)?,
             requeue_quality_skips: parse_bool_env("REQUEUE_QUALITY_SKIPS", false)?,
+            // Library re-sync: periodic safety net + debounced external triggers.
+            sync_interval_secs: parse_env("SYNC_INTERVAL_SECS", 3600u64)?,
+            sync_debounce_secs: parse_env("SYNC_DEBOUNCE_SECS", 15u64)?,
+            // Webhook server is opt-in: enabled only when a bind address is given.
+            // A token is then mandatory so the endpoint can't be triggered
+            // anonymously.
+            webhook_bind: non_empty(env::var("WEBHOOK_BIND").ok()),
+            webhook_token: non_empty(env::var("WEBHOOK_TOKEN").ok()),
             // Optional: when unset, no media-manager refresh is performed after
             // a transcode completes. Radarr handles movies, Sonarr series.
             radarr_url: env::var("RADARR_URL").ok(),
             radarr_api_key: env::var("RADARR_API_KEY").ok(),
             sonarr_url: env::var("SONARR_URL").ok(),
             sonarr_api_key: env::var("SONARR_API_KEY").ok(),
-        })
+        };
+
+        if config.webhook_bind.is_some() && config.webhook_token.is_none() {
+            return Err(ConfigError::Missing("WEBHOOK_TOKEN".into()));
+        }
+
+        Ok(config)
     }
+}
+
+/// Treats empty strings as absent, so an env var set to "" disables the feature
+/// instead of becoming a degenerate value.
+fn non_empty(v: Option<String>) -> Option<String> {
+    v.filter(|s| !s.trim().is_empty())
 }
 
 fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> Result<T, ConfigError>

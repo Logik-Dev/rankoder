@@ -45,8 +45,13 @@ pub async fn run_vmaf_backfill(
             return;
         }
 
-        match vmaf::compute_vmaf(Path::new(&original), Path::new(&transcoded), n_subsample, n_threads)
-            .await
+        match vmaf::compute_vmaf(
+            Path::new(&original),
+            Path::new(&transcoded),
+            n_subsample,
+            n_threads,
+        )
+        .await
         {
             Ok(score) => {
                 if let Err(e) = store.record_vmaf(&id, score).await {
@@ -72,7 +77,10 @@ pub async fn run_vmaf_backfill(
 /// previously measured score clears the current threshold are touched, keeping
 /// this safe and idempotent.
 #[instrument(skip_all)]
-pub async fn run_requeue_quality_skips(store: Arc<MediaStore>, min_vmaf: f64) -> anyhow::Result<()> {
+pub async fn run_requeue_quality_skips(
+    store: Arc<MediaStore>,
+    min_vmaf: f64,
+) -> anyhow::Result<()> {
     let ids = store.requeue_quality_skips(min_vmaf).await?;
     info!(
         count = ids.len(),

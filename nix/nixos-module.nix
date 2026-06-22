@@ -170,6 +170,46 @@ in
       description = "Value for RUST_LOG / the tracing EnvFilter.";
     };
 
+    syncInterval = lib.mkOption {
+      type = lib.types.int;
+      default = 3600;
+      description = ''
+        Periodic library re-sync cadence in seconds (SYNC_INTERVAL_SECS). The
+        sync also runs once immediately at startup and on each webhook trigger;
+        this timer is the safety net that guarantees eventual convergence even
+        if a webhook is missed. `0` disables the timer (startup + webhook only).
+      '';
+    };
+
+    webhook = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Run the webhook HTTP server so Radarr/Sonarr (Connect → Webhook,
+          "On Import") and Jellyfin (Webhook plugin) can trigger a library
+          re-sync on demand. Triggers are debounced and coalesced into a single
+          sync. Requires `WEBHOOK_TOKEN` in {option}`environmentFile`; callers
+          must send it in the `X-Rankoder-Token` header.
+        '';
+      };
+      address = lib.mkOption {
+        type = lib.types.str;
+        default = "127.0.0.1";
+        description = ''
+          Address to bind the webhook server. Defaults to loopback, which is
+          correct when Radarr/Sonarr/Jellyfin run on this host; no firewall hole
+          is opened. Use a LAN address only if the callers are remote (and open
+          the port yourself).
+        '';
+      };
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 8765;
+        description = "Port for the webhook server (combined with {option}`address` into WEBHOOK_BIND).";
+      };
+    };
+
     hardwareAcceleration = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -277,10 +317,14 @@ in
         TRANSCODE_RETENTION_DIR = cfg.retentionDir;
         TRANSCODE_RETENTION_DAYS = toString cfg.retentionDays;
         MIN_VMAF = toString cfg.minVmaf;
+        SYNC_INTERVAL_SECS = toString cfg.syncInterval;
         RUST_LOG = cfg.logLevel;
       }
       // lib.optionalAttrs (cfg.radarrUrl != null) { RADARR_URL = cfg.radarrUrl; }
       // lib.optionalAttrs (cfg.sonarrUrl != null) { SONARR_URL = cfg.sonarrUrl; }
+      // lib.optionalAttrs cfg.webhook.enable {
+        WEBHOOK_BIND = "${cfg.webhook.address}:${toString cfg.webhook.port}";
+      }
       // lib.optionalAttrs cfg.backfillVmaf { BACKFILL_VMAF = "1"; }
       // lib.optionalAttrs cfg.requeueQualitySkips { REQUEUE_QUALITY_SKIPS = "1"; }
       // cfg.settings;

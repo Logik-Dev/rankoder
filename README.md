@@ -19,8 +19,10 @@ After a successful transcode, the original is moved to a retention directory
 
 Two pipelines share a `MediaStore` (Postgres):
 
-- **Sync** (once at startup): `JellyfinProvider` → `SyncOrchestrator` →
-  `MediaStore`. Fetches series, episodes and movies and upserts them.
+- **Sync** (at startup, then periodically and on demand): `JellyfinProvider` →
+  `SyncOrchestrator` → `MediaStore`. Fetches series, episodes and movies and
+  upserts them. A `SyncScheduler` runs it once immediately at startup, then on a
+  timer and on webhook triggers — see [Library sync](#library-sync).
 - **Event** (daemon): a row in the `events` table fires `pg_notify` →
   `PostgresListener` → `WorkflowOrchestrator` → ffprobe → analysis → MQTT
   approval → transcode → done.
@@ -32,6 +34,36 @@ discovered → probed → analyzed → pending_approval → transcoding → done
                                                                  → skipped
                                                                  → failed
 ```
+
+## Library sync
+
+The `SyncScheduler` owns the library sync and runs it from three sources, all
+coalesced behind a single-flight loop (two syncs never overlap):
+
+1. **Startup** — one immediate, non-blocking sync. A failure is non-fatal: the
+   daemon keeps serving work already in the DB (the listener reconciles active
+   files from DB state, independent of the sync), and the next tick/trigger
+   retries. So Jellyfin being briefly down at boot no longer crash-loops the
+   service.
+2. **Periodic** (`syncInterval`, default 1h) — the safety net that guarantees
+   eventual convergence even if a trigger is missed. `0` disables it.
+3. **Webhook** (`webhook.enable`) — on-demand, event-driven. Radarr, Sonarr and
+   Jellyfin POST to `/sync` when the library changes; bursts (e.g. importing a
+   season) are **debounced** (`SYNC_DEBOUNCE_SECS`, default 15s) and collapsed
+   into one sync.
+
+The webhook server exposes `POST /sync` (requires the `X-Rankoder-Token` header)
+and `GET /healthz`. It binds to loopback by default — correct when the *arr
+stack and Jellyfin run on the same host, with no firewall hole. The body is
+ignored: any call just nudges a full re-sync.
+
+Configure the callers to `POST http://127.0.0.1:8765/sync` with header
+`X-Rankoder-Token: <token>`:
+
+- **Radarr / Sonarr** — *Settings → Connect → + → Webhook*: URL above, method
+  `POST`, add the header, tick *On Import* / *On Upgrade*.
+- **Jellyfin** — the *Webhook* plugin: add a destination pointing at the URL,
+  with the header, for the `ItemAdded` notification.
 
 ## Monitoring (MQTT / Home Assistant)
 
@@ -291,6 +323,9 @@ Add the flake as an input and import the module:
 | `autoMigrate` | `true` | Run migrations at startup |
 | `hardwareAcceleration` | `false` | Grant the GPU: `/dev/dri` (VAAPI/QSV) + `/dev/nvidia*` (NVENC) + video/render groups |
 | `logLevel` | `info` | `RUST_LOG` / tracing filter |
+| `syncInterval` | `3600` | Periodic library re-sync cadence in seconds (`SYNC_INTERVAL_SECS`). `0` = startup + webhook only |
+| `webhook.enable` | `false` | Run the webhook server so Radarr/Sonarr/Jellyfin can trigger a re-sync. Needs `WEBHOOK_TOKEN` in `environmentFile` |
+| `webhook.address` / `webhook.port` | `127.0.0.1` / `8765` | Bind address for the webhook server (`WEBHOOK_BIND`) |
 | `minVmaf` | `0.0` | Post-encode VMAF quality gate (`MIN_VMAF`). `0` = observe only (measure + record, never reject); set > 0 (e.g. `92`) to reject encodes below it |
 | `backfillVmaf` | `false` | One-shot: score `done` files that predate the VMAF gate (`BACKFILL_VMAF`). Enable → deploy once → disable |
 | `requeueQualitySkips` | `false` | One-shot: re-encode `QualityTooLow` skips that now clear `MIN_VMAF` (`REQUEUE_QUALITY_SKIPS`). Enable → deploy once → disable |

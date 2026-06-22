@@ -1,7 +1,8 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use sqlx::postgres::PgPoolOptions;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument};
@@ -16,6 +17,7 @@ use crate::{
     notification::{StatusNotifier, mqtt::MqttNotifier, reporter::StatusReporter},
     probe::FFmpeg,
     providers::{JellyfinProvider, MovieNotifier, RadarrClient, SeriesNotifier, SonarrClient},
+    scheduler::SyncScheduler,
     store::MediaStore,
     sync::SyncOrchestrator,
     transcode::orchestrator::{MediaNotifiers, TranscodeOrchestrator},
@@ -26,12 +28,14 @@ use crate::{
 mod analysis;
 mod approval;
 mod config;
+mod http;
 mod listener;
 mod maintenance;
 pub mod models;
 mod notification;
 mod probe;
 pub mod providers;
+mod scheduler;
 pub mod store;
 mod sync;
 mod transcode;
@@ -97,10 +101,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let provider = JellyfinProvider::new(&cfg.jellyfin_url, &cfg.jellyfin_api_key)?;
 
-    let sync_orchestrator = SyncOrchestrator::new(provider.clone(), provider, store.clone());
-    sync_orchestrator.sync().await?;
-
-    info!("sync complete, waiting for Ctrl+C to stop");
+    // The library sync is no longer run inline here: the SyncScheduler (spawned
+    // below) runs it immediately at startup, then periodically and on webhook
+    // triggers. Startup is non-blocking and a sync failure is non-fatal — the
+    // listener's catch-up already resumes any work already in the DB.
+    let sync_orchestrator = Arc::new(SyncOrchestrator::new(
+        provider.clone(),
+        provider,
+        store.clone(),
+    ));
 
     // Detect encoder at startup
     info!("detecting HEVC encoder...");
@@ -205,6 +214,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let status_reporter = StatusReporter::new(store.clone(), status_notifier);
     join_set.spawn(status_reporter.run(token.child_token()));
+
+    // Library sync: immediate at startup, then periodic + on external triggers.
+    let sync_trigger = Arc::new(Notify::new());
+    let scheduler = SyncScheduler::new(
+        sync_orchestrator,
+        Duration::from_secs(cfg.sync_interval_secs),
+        Duration::from_secs(cfg.sync_debounce_secs),
+        sync_trigger.clone(),
+    );
+    join_set.spawn(scheduler.run(token.child_token()));
+
+    // Webhook server is opt-in: only when a bind address is configured. The
+    // token is guaranteed present by config validation when bind is set.
+    if let Some(bind) = cfg.webhook_bind.clone() {
+        let webhook_token = cfg
+            .webhook_token
+            .clone()
+            .expect("config validation requires WEBHOOK_TOKEN when WEBHOOK_BIND is set");
+        join_set.spawn(http::serve(
+            bind,
+            webhook_token,
+            sync_trigger.clone(),
+            token.child_token(),
+        ));
+    } else {
+        info!("webhook server disabled (WEBHOOK_BIND unset)");
+    }
 
     // One-shot VMAF backfill. Detached (not in `join_set`) so its completion
     // doesn't trip the shutdown select; the child token stops it on Ctrl+C.

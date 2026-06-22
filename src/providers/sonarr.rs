@@ -79,7 +79,11 @@ impl SeriesNotifier for SonarrClient {
             .await?
             .error_for_status()?;
 
-        debug!(tvdb_id, sonarr_series_id = series.id, "requested Sonarr rescan");
+        debug!(
+            tvdb_id,
+            sonarr_series_id = series.id,
+            "requested Sonarr rescan"
+        );
         Ok(())
     }
 }

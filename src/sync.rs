@@ -103,7 +103,10 @@ where
         // cause: episodes Jellyfin returns without a season/episode number
         // (non-SxxEyy library structures).
         if skipped > 0 {
-            warn!(skipped, "episodes skipped (missing series link or season/episode number)");
+            warn!(
+                skipped,
+                "episodes skipped (missing series link or season/episode number)"
+            );
         }
         let count = drafts.len();
         self.store.insert_episodes_batched(&drafts, 500).await?;

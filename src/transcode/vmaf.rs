@@ -136,14 +136,14 @@ mod tests {
     #[test]
     fn missing_pooled_metrics_is_error() {
         let json = r#"{ "frames": [] }"#;
-        assert!(matches!(
-            parse_vmaf_log(json),
-            Err(VmafError::MissingScore)
-        ));
+        assert!(matches!(parse_vmaf_log(json), Err(VmafError::MissingScore)));
     }
 
     #[test]
     fn malformed_json_is_parse_error() {
-        assert!(matches!(parse_vmaf_log("not json"), Err(VmafError::Parse(_))));
+        assert!(matches!(
+            parse_vmaf_log("not json"),
+            Err(VmafError::Parse(_))
+        ));
     }
 }

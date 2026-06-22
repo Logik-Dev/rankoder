@@ -1110,12 +1110,20 @@ mod tests {
             .unwrap_or(0)
     }
 
-    async fn insert_movie_titled(pool: &PgPool, title: &str, state: WorkflowStateTag) -> (Uuid, Uuid) {
+    async fn insert_movie_titled(
+        pool: &PgPool,
+        title: &str,
+        state: WorkflowStateTag,
+    ) -> (Uuid, Uuid) {
         let movie_id = Uuid::now_v7();
-        sqlx::query!("INSERT INTO movies (id, title) VALUES ($1, $2)", movie_id, title)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query!(
+            "INSERT INTO movies (id, title) VALUES ($1, $2)",
+            movie_id,
+            title
+        )
+        .execute(pool)
+        .await
+        .unwrap();
 
         let file_id = Uuid::now_v7();
         sqlx::query!(
@@ -1368,8 +1376,16 @@ mod tests {
             .iter()
             .find(|(id, _, _)| id.as_uuid() == f_inc)
             .expect("done file lacking vmaf with retention must be returned");
-        assert_eq!(found.1, format!("/tmp/orig_{f_inc}.mkv"), "retained original");
-        assert_eq!(found.2, format!("/tmp/cur_{f_inc}.mkv"), "current transcoded");
+        assert_eq!(
+            found.1,
+            format!("/tmp/orig_{f_inc}.mkv"),
+            "retained original"
+        );
+        assert_eq!(
+            found.2,
+            format!("/tmp/cur_{f_inc}.mkv"),
+            "current transcoded"
+        );
 
         for f in [f_scored, f_noret, f_skip] {
             assert!(

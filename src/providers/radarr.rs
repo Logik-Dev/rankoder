@@ -79,7 +79,11 @@ impl MovieNotifier for RadarrClient {
             .await?
             .error_for_status()?;
 
-        debug!(tmdb_id, radarr_movie_id = movie.id, "requested Radarr rescan");
+        debug!(
+            tmdb_id,
+            radarr_movie_id = movie.id,
+            "requested Radarr rescan"
+        );
         Ok(())
     }
 }
