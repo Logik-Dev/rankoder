@@ -6,6 +6,12 @@ its *operational contract* (NixOS module options, environment variables, MQTT
 topics/payloads, DB migrations) rather than a Rust API.
 
 
+## [0.2.0] - 2026-06-22
+
+### Breaking
+
+- **http:** Serve operator dashboard; rename WEBHOOK_BIND → HTTP_BIND
+
 ## [0.1.0] - 2026-06-22
 
 ### Features
