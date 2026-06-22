@@ -227,6 +227,32 @@ commit `.sqlx/`.**
 This project uses **jj** (Jujutsu) for version control; a `.git` directory
 exists for compatibility. Note that jj does not run git hooks.
 
+### Versioning & releases
+
+[Semantic Versioning](https://semver.org), applied to the **operational
+contract** — NixOS module options, environment variables, MQTT topics/payloads,
+DB migrations — not a Rust API (rankoder ships a binary, not a library):
+
+- `fix:` → **patch**, `feat:` → **minor**, `feat!:` / `BREAKING CHANGE:` →
+  **major**. In `0.x`, a breaking change bumps the **minor** (`0.1 → 0.2`).
+- Commits follow [Conventional Commits](https://www.conventionalcommits.org);
+  [`git-cliff`](https://git-cliff.org) (in the dev shell) turns them into
+  `CHANGELOG.md`.
+
+Cutting a release (jj cannot create tags itself — use the colocated `.git`):
+
+```sh
+# 1. bump version in Cargo.toml, then regenerate the changelog for the new tag
+git-cliff --tag vX.Y.Z -o CHANGELOG.md
+# 2. commit the bump + changelog
+jj commit -m "chore(release): X.Y.Z"
+# 3. tag it via git, then push the tag
+git tag -a vX.Y.Z -m "rankoder X.Y.Z"
+```
+
+Deployment stays on a rolling `main`; tags are milestones / rollback points
+(`nix flake update` to a specific rev or tag if a release misbehaves).
+
 ## Deployment (NixOS)
 
 The `flake.nix` at the repo root is for packaging/deployment and is independent

@@ -39,6 +39,7 @@ in
     pkgs.sqlx-cli
     pkgs.secretspec
     pkgs.cargo-watch
+    pkgs.git-cliff
   ];
 
   languages = {
