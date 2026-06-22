@@ -22,6 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 rmcp = { version = "1.7.0", features = ["server", "macros", "transport-streamable-http-server"] }
 axum = "0.8"
+maud = "0.27"
 tokio-util = { version = "0.7.18", features = ["rt"] }
 rumqttc = "0.25"
 serde_with = "3.20"

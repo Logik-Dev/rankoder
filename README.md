@@ -47,15 +47,17 @@ coalesced behind a single-flight loop (two syncs never overlap):
    service.
 2. **Periodic** (`syncInterval`, default 1h) — the safety net that guarantees
    eventual convergence even if a trigger is missed. `0` disables it.
-3. **Webhook** (`webhook.enable`) — on-demand, event-driven. Radarr, Sonarr and
-   Jellyfin POST to `/sync` when the library changes; bursts (e.g. importing a
-   season) are **debounced** (`SYNC_DEBOUNCE_SECS`, default 15s) and collapsed
-   into one sync.
+3. **Webhook** (`http.enable` + `WEBHOOK_TOKEN`) — on-demand, event-driven.
+   Radarr, Sonarr and Jellyfin POST to `/sync` when the library changes; bursts
+   (e.g. importing a season) are **debounced** (`SYNC_DEBOUNCE_SECS`, default
+   15s) and collapsed into one sync.
 
-The webhook server exposes `POST /sync` (requires the `X-Rankoder-Token` header)
-and `GET /healthz`. It binds to loopback by default — correct when the *arr
-stack and Jellyfin run on the same host, with no firewall hole. The body is
-ignored: any call just nudges a full re-sync.
+The HTTP server (`http.enable`) exposes `POST /sync` (requires the
+`X-Rankoder-Token` header), `GET /healthz`, and the operator
+[dashboard](#dashboard) at `GET /`. It binds to loopback by default — correct
+when the *arr stack and Jellyfin run on the same host, with no firewall hole.
+The `/sync` body is ignored: any call just nudges a full re-sync. The webhook is
+mounted only when `WEBHOOK_TOKEN` is set; without it the UI is still served.
 
 Configure the callers to `POST http://127.0.0.1:8765/sync` with header
 `X-Rankoder-Token: <token>`:
@@ -64,6 +66,20 @@ Configure the callers to `POST http://127.0.0.1:8765/sync` with header
   `POST`, add the header, tick *On Import* / *On Upgrade*.
 - **Jellyfin** — the *Webhook* plugin: add a destination pointing at the URL,
   with the header, for the `ItemAdded` notification.
+
+## Dashboard
+
+When the HTTP server is enabled (`http.enable`), `GET /` serves a read-only
+operator dashboard: per-state file counts, total space saved, the VMAF score
+distribution and the most recent failure. It is server-rendered (no JavaScript,
+no build step) and reads straight through the app's database pool, so there is
+nothing extra to deploy — it ships inside the binary. The page refreshes itself
+every 60s.
+
+The UI has **no authentication of its own**: keep the bind on loopback
+(`http.address`, default `127.0.0.1`) and put it behind your reverse proxy,
+which handles auth. The `/sync` webhook keeps its own `X-Rankoder-Token` gate
+for machine callers.
 
 ## Monitoring (MQTT / Home Assistant)
 
@@ -350,8 +366,8 @@ Add the flake as an input and import the module:
 | `hardwareAcceleration` | `false` | Grant the GPU: `/dev/dri` (VAAPI/QSV) + `/dev/nvidia*` (NVENC) + video/render groups |
 | `logLevel` | `info` | `RUST_LOG` / tracing filter |
 | `syncInterval` | `3600` | Periodic library re-sync cadence in seconds (`SYNC_INTERVAL_SECS`). `0` = startup + webhook only |
-| `webhook.enable` | `false` | Run the webhook server so Radarr/Sonarr/Jellyfin can trigger a re-sync. Needs `WEBHOOK_TOKEN` in `environmentFile` |
-| `webhook.address` / `webhook.port` | `127.0.0.1` / `8765` | Bind address for the webhook server (`WEBHOOK_BIND`) |
+| `http.enable` | `false` | Run the HTTP server: operator [dashboard](#dashboard) (`GET /`) + sync webhook (`POST /sync`). The webhook needs `WEBHOOK_TOKEN` in `environmentFile`; without it the UI is still served |
+| `http.address` / `http.port` | `127.0.0.1` / `8765` | Bind address for the HTTP server (`HTTP_BIND`). Keep on loopback behind a reverse proxy |
 | `minVmaf` | `0.0` | Post-encode VMAF quality gate (`MIN_VMAF`). `0` = observe only (measure + record, never reject); set > 0 (e.g. `92`) to reject encodes below it |
 | `backfillVmaf` | `false` | One-shot: score `done` files that predate the VMAF gate (`BACKFILL_VMAF`). Enable → deploy once → disable |
 | `requeueQualitySkips` | `false` | One-shot: re-encode `QualityTooLow` skips that now clear `MIN_VMAF` (`REQUEUE_QUALITY_SKIPS`). Enable → deploy once → disable |

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT round((transcode_spec->>'vmaf')::float8)::int AS \"vmaf!\",\n                   COUNT(*) AS \"count!\"\n            FROM media_files\n            WHERE jsonb_exists(transcode_spec, 'vmaf')\n            GROUP BY 1 ORDER BY 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "vmaf!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "30ae7104017188ad26151544dcda8763691c8bc4ee8a62aac576b37c1bec65e9"
+}

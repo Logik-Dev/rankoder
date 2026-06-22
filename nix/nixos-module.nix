@@ -181,32 +181,35 @@ in
       '';
     };
 
-    webhook = {
+    http = {
       enable = lib.mkOption {
         type = lib.types.bool;
         default = false;
         description = ''
-          Run the webhook HTTP server so Radarr/Sonarr (Connect → Webhook,
-          "On Import") and Jellyfin (Webhook plugin) can trigger a library
-          re-sync on demand. Triggers are debounced and coalesced into a single
-          sync. Requires `WEBHOOK_TOKEN` in {option}`environmentFile`; callers
-          must send it in the `X-Rankoder-Token` header.
+          Run the HTTP server. It hosts two things on one listener: the
+          read-only operator **UI** (`GET /`) and the sync **webhook**
+          (`POST /sync`) for Radarr/Sonarr (Connect → Webhook, "On Import") and
+          Jellyfin (Webhook plugin). The UI is always served; the webhook is
+          mounted only when `WEBHOOK_TOKEN` is set in {option}`environmentFile`
+          (callers send it in the `X-Rankoder-Token` header). The UI has no auth
+          of its own — keep the bind on loopback and front it with a reverse
+          proxy.
         '';
       };
       address = lib.mkOption {
         type = lib.types.str;
         default = "127.0.0.1";
         description = ''
-          Address to bind the webhook server. Defaults to loopback, which is
-          correct when Radarr/Sonarr/Jellyfin run on this host; no firewall hole
-          is opened. Use a LAN address only if the callers are remote (and open
-          the port yourself).
+          Address to bind the HTTP server. Defaults to loopback, which is correct
+          when Radarr/Sonarr/Jellyfin and the reverse proxy run on this host; no
+          firewall hole is opened. Use a LAN address only if callers are remote
+          (and open the port yourself).
         '';
       };
       port = lib.mkOption {
         type = lib.types.port;
         default = 8765;
-        description = "Port for the webhook server (combined with {option}`address` into WEBHOOK_BIND).";
+        description = "Port for the HTTP server (combined with {option}`address` into HTTP_BIND).";
       };
     };
 
@@ -322,8 +325,8 @@ in
       }
       // lib.optionalAttrs (cfg.radarrUrl != null) { RADARR_URL = cfg.radarrUrl; }
       // lib.optionalAttrs (cfg.sonarrUrl != null) { SONARR_URL = cfg.sonarrUrl; }
-      // lib.optionalAttrs cfg.webhook.enable {
-        WEBHOOK_BIND = "${cfg.webhook.address}:${toString cfg.webhook.port}";
+      // lib.optionalAttrs cfg.http.enable {
+        HTTP_BIND = "${cfg.http.address}:${toString cfg.http.port}";
       }
       // lib.optionalAttrs cfg.backfillVmaf { BACKFILL_VMAF = "1"; }
       // lib.optionalAttrs cfg.requeueQualitySkips { REQUEUE_QUALITY_SKIPS = "1"; }

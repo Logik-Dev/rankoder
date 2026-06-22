@@ -671,6 +671,25 @@ impl MediaStore {
         Ok(rows.into_iter().map(|r| (r.state, r.count)).collect())
     }
 
+    /// Distribution of recorded VMAF scores, rounded to the nearest integer, as
+    /// `(score, count)` pairs ordered by score. Drives the dashboard histogram;
+    /// only files with a measured score (`transcode_spec.vmaf`) are included.
+    pub async fn fetch_vmaf_distribution(&self) -> Result<Vec<(i32, i64)>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT round((transcode_spec->>'vmaf')::float8)::int AS "vmaf!",
+                   COUNT(*) AS "count!"
+            FROM media_files
+            WHERE jsonb_exists(transcode_spec, 'vmaf')
+            GROUP BY 1 ORDER BY 1
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| (r.vmaf, r.count)).collect())
+    }
+
     /// Total bytes saved across all completed transcodes, summed from the
     /// `transcoded` events (which survive retention reaping, unlike the
     /// originals themselves).

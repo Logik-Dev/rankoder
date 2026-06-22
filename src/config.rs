@@ -42,11 +42,13 @@ pub struct AppConfig {
     /// Debounce window (seconds) applied to webhook/MQTT triggers so a burst of
     /// events (e.g. importing a whole season) collapses into a single sync.
     pub sync_debounce_secs: u64,
-    /// `host:port` to bind the webhook HTTP server. Unset (or empty) disables
-    /// the server entirely. Defaults to loopback when only a port is intended.
-    pub webhook_bind: Option<String>,
+    /// `host:port` to bind the HTTP server (operator UI + sync webhook). Unset
+    /// (or empty) disables the server entirely. Bind loopback and front it with
+    /// a reverse proxy — the UI has no auth of its own.
+    pub http_bind: Option<String>,
     /// Shared secret expected in the `X-Rankoder-Token` header on webhook calls.
-    /// Required whenever `webhook_bind` is set.
+    /// Optional: when unset the `/sync` webhook is simply not mounted (the UI is
+    /// still served). The webhook is opt-in by the token's presence.
     pub webhook_token: Option<String>,
     pub radarr_url: Option<String>,
     pub radarr_api_key: Option<String>,
@@ -99,10 +101,10 @@ impl AppConfig {
             // Library re-sync: periodic safety net + debounced external triggers.
             sync_interval_secs: parse_env("SYNC_INTERVAL_SECS", 3600u64)?,
             sync_debounce_secs: parse_env("SYNC_DEBOUNCE_SECS", 15u64)?,
-            // Webhook server is opt-in: enabled only when a bind address is given.
-            // A token is then mandatory so the endpoint can't be triggered
-            // anonymously.
-            webhook_bind: non_empty(env::var("WEBHOOK_BIND").ok()),
+            // HTTP server is opt-in: enabled only when a bind address is given.
+            // It serves the operator UI; the `/sync` webhook is mounted on top
+            // only when WEBHOOK_TOKEN is also set (see http::serve).
+            http_bind: non_empty(env::var("HTTP_BIND").ok()),
             webhook_token: non_empty(env::var("WEBHOOK_TOKEN").ok()),
             // Optional: when unset, no media-manager refresh is performed after
             // a transcode completes. Radarr handles movies, Sonarr series.
@@ -111,10 +113,6 @@ impl AppConfig {
             sonarr_url: env::var("SONARR_URL").ok(),
             sonarr_api_key: env::var("SONARR_API_KEY").ok(),
         };
-
-        if config.webhook_bind.is_some() && config.webhook_token.is_none() {
-            return Err(ConfigError::Missing("WEBHOOK_TOKEN".into()));
-        }
 
         Ok(config)
     }

@@ -10,6 +10,8 @@ use tokio::{net::TcpListener, sync::Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::{store::MediaStore, ui};
+
 /// Header carrying the shared secret on webhook calls.
 const TOKEN_HEADER: &str = "x-rankoder-token";
 
@@ -19,32 +21,42 @@ struct WebhookState {
     token: Arc<String>,
 }
 
-/// Run the webhook HTTP server until `cancel` fires.
+/// Run the HTTP server until `cancel` fires. It hosts two things on one listener:
 ///
-/// Exposes:
-/// - `POST /sync` — requires the `X-Rankoder-Token` header; pings the sync
-///   scheduler and returns `202`. The body is ignored: any source (Radarr,
-///   Sonarr, Jellyfin) just nudges a full, debounced re-sync.
-/// - `GET /healthz` — unauthenticated liveness probe.
+/// - the operator **UI** (`GET /`, `/static/*`) and a `GET /healthz` probe —
+///   always on, unauthenticated, meant to sit behind a reverse proxy;
+/// - the sync **webhook** (`POST /sync`) — mounted only when a `token` is given.
+///   It requires the `X-Rankoder-Token` header and nudges a debounced re-sync;
+///   the body is ignored, so any caller (Radarr, Sonarr, Jellyfin) just pings it.
+///
+/// Decoupling the webhook from the bind (it used to be mandatory) lets the UI be
+/// served without exposing a sync endpoint.
 pub async fn serve(
     bind: String,
-    token: String,
+    token: Option<String>,
+    store: Arc<MediaStore>,
     trigger: Arc<Notify>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
-    let state = WebhookState {
-        trigger,
-        token: Arc::new(token),
-    };
-
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/healthz", get(healthz))
-        .route("/sync", post(sync))
-        .with_state(state);
+        .merge(ui::router(store));
+
+    match token {
+        Some(token) => {
+            let state = WebhookState {
+                trigger,
+                token: Arc::new(token),
+            };
+            app = app.merge(Router::new().route("/sync", post(sync)).with_state(state));
+            info!("sync webhook enabled (POST /sync)");
+        }
+        None => info!("sync webhook disabled (WEBHOOK_TOKEN unset); UI only"),
+    }
 
     let addr: SocketAddr = bind.parse()?;
     let listener = TcpListener::bind(addr).await?;
-    info!(%addr, "webhook server listening");
+    info!(%addr, "http server listening");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(async move { cancel.cancelled().await })

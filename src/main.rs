@@ -39,6 +39,7 @@ mod scheduler;
 pub mod store;
 mod sync;
 mod transcode;
+mod ui;
 mod workflow;
 
 #[tokio::main]
@@ -227,21 +228,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     join_set.spawn(scheduler.run(token.child_token()));
 
-    // Webhook server is opt-in: only when a bind address is configured. The
-    // token is guaranteed present by config validation when bind is set.
-    if let Some(bind) = cfg.webhook_bind.clone() {
-        let webhook_token = cfg
-            .webhook_token
-            .clone()
-            .expect("config validation requires WEBHOOK_TOKEN when WEBHOOK_BIND is set");
+    // HTTP server is opt-in: only when a bind address is configured. It serves
+    // the operator UI; the /sync webhook is additionally mounted when a token is
+    // set (handled inside http::serve).
+    if let Some(bind) = cfg.http_bind.clone() {
         join_set.spawn(http::serve(
             bind,
-            webhook_token,
+            cfg.webhook_token.clone(),
+            store.clone(),
             sync_trigger.clone(),
             token.child_token(),
         ));
     } else {
-        info!("webhook server disabled (WEBHOOK_BIND unset)");
+        info!("http server disabled (HTTP_BIND unset)");
     }
 
     // One-shot VMAF backfill. Detached (not in `join_set`) so its completion

@@ -1,0 +1,120 @@
+:root {
+  --bg: #11131a;
+  --panel: #1a1d27;
+  --border: #2a2e3c;
+  --text: #e6e8ef;
+  --muted: #8b90a3;
+  --accent: #6ea8fe;
+  --bar: #4c7dff;
+  --fail: #ff6b6b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+header h1 { margin: 0; font-size: 1.6rem; }
+
+.version {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+h2 {
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 2rem 0 0.75rem;
+}
+
+section { max-width: 960px; }
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.75rem;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.tile .n {
+  font-size: 1.8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.tile .unit { color: var(--muted); font-size: 0.9rem; }
+
+.tile .label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tile.saved { border-color: var(--accent); }
+.tile.saved .n { color: var(--accent); }
+
+.histogram {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 200px;
+  padding: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.histogram .bar {
+  flex: 1;
+  min-height: 2px;
+  background: var(--bar);
+  border-radius: 3px 3px 0 0;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+
+.histogram .bar .tick {
+  position: absolute;
+  bottom: -1.4rem;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.failure .kind {
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.failure .title { font-weight: 600; }
+.failure .reason { color: var(--fail); font-family: ui-monospace, monospace; font-size: 0.85rem; }
+
+.empty { color: var(--muted); }
