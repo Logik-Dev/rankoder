@@ -6,6 +6,30 @@ its *operational contract* (NixOS module options, environment variables, MQTT
 topics/payloads, DB migrations) rather than a Rust API.
 
 
+## [0.2.5] - 2026-06-23
+
+### Features
+
+- **ui:** Delete quality-confirmed originals from retention
+
+## [0.2.4] - 2026-06-23
+
+### Features
+
+- **ui:** Requeue failed files by cause from the dashboard
+
+## [0.2.3] - 2026-06-23
+
+### Features
+
+- **ui:** Group failed files by cause on the dashboard
+
+## [0.2.2] - 2026-06-23
+
+### Features
+
+- **ui:** Add backlog and codec×state breakdown to the dashboard
+
 ## [0.2.1] - 2026-06-22
 
 ### Bug Fixes
