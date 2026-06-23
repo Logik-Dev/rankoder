@@ -34,13 +34,14 @@ struct WebhookState {
 pub async fn serve(
     bind: String,
     token: Option<String>,
+    ui_control_token: Option<String>,
     store: Arc<MediaStore>,
     trigger: Arc<Notify>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     let mut app = Router::new()
         .route("/healthz", get(healthz))
-        .merge(ui::router(store));
+        .merge(ui::router(store, ui_control_token));
 
     match token {
         Some(token) => {

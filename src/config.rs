@@ -50,6 +50,13 @@ pub struct AppConfig {
     /// Optional: when unset the `/sync` webhook is simply not mounted (the UI is
     /// still served). The webhook is opt-in by the token's presence.
     pub webhook_token: Option<String>,
+    /// Shared secret gating the UI's mutating actions (`/actions/*`, e.g. the
+    /// failure requeue). Optional: when unset those routes are not mounted at
+    /// all and the dashboard stays strictly read-only. When set, the server
+    /// embeds it as a hidden field in each action form and checks it on POST —
+    /// defence in depth on top of the reverse proxy, and a same-origin guard
+    /// (a cross-origin page can't read the token to forge the request).
+    pub ui_control_token: Option<String>,
     pub radarr_url: Option<String>,
     pub radarr_api_key: Option<String>,
     pub sonarr_url: Option<String>,
@@ -106,6 +113,8 @@ impl AppConfig {
             // only when WEBHOOK_TOKEN is also set (see http::serve).
             http_bind: non_empty(env::var("HTTP_BIND").ok()),
             webhook_token: non_empty(env::var("WEBHOOK_TOKEN").ok()),
+            // UI write actions are opt-in: mounted only when this is set.
+            ui_control_token: non_empty(env::var("UI_CONTROL_TOKEN").ok()),
             // Optional: when unset, no media-manager refresh is performed after
             // a transcode completes. Radarr handles movies, Sonarr series.
             radarr_url: env::var("RADARR_URL").ok(),

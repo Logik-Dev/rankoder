@@ -126,6 +126,32 @@ impl FailureClass {
     pub fn auto_requeueable(self) -> bool {
         matches!(self, Self::MissingVideoProperties)
     }
+
+    /// Stable machine key for form values / round-tripping over HTTP (distinct
+    /// from the human `label`, which may contain spaces and punctuation).
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::MissingVideoProperties => "missing_video_properties",
+            Self::SwapPermission => "swap_permission",
+            Self::SwapReadOnly => "swap_read_only",
+            Self::SwapCrossDevice => "swap_cross_device",
+            Self::Ffmpeg => "ffmpeg",
+            Self::Other => "other",
+        }
+    }
+
+    /// Inverse of [`key`]; `None` for an unknown key.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Some(match key {
+            "missing_video_properties" => Self::MissingVideoProperties,
+            "swap_permission" => Self::SwapPermission,
+            "swap_read_only" => Self::SwapReadOnly,
+            "swap_cross_device" => Self::SwapCrossDevice,
+            "ffmpeg" => Self::Ffmpeg,
+            "other" => Self::Other,
+            _ => return None,
+        })
+    }
 }
 
 /// One row of the failure panel: a cause and how many currently-`failed` files
@@ -942,6 +968,65 @@ impl MediaStore {
         Ok(breakdown)
     }
 
+    /// Requeue the currently-`failed` files of a given [`FailureClass`] back to
+    /// `discovered`, so the event pipeline re-probes them from scratch. Returns
+    /// the ids actually moved.
+    ///
+    /// Classification reuses `FailureClass::classify` on each file's most recent
+    /// failure error (single source of truth, same as the panel). Each file is
+    /// moved via [`transition`] with a `from = Failed` guard, so a file already
+    /// re-driven concurrently (e.g. by a double-submit) is simply skipped —
+    /// idempotent.
+    pub async fn requeue_failed(
+        &self,
+        class: FailureClass,
+    ) -> Result<Vec<MediaFileId>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT DISTINCT ON (mf.id) mf.id, e.event->>'error' AS error
+            FROM media_files mf
+            JOIN events e
+              ON e.media_file_id = mf.id
+             AND e.event->>'type' = 'transcode_failed'
+            WHERE mf.workflow_state = 'failed'
+            ORDER BY mf.id, e.id DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        // The event only serves to wake the pipeline (the listener keys off the
+        // file id; the orchestrator dispatches on the file's state). Tag the
+        // source so a requeue is distinguishable from the original sync.
+        let event = MediaEvent::Discovered {
+            source: "requeue".into(),
+        };
+
+        let mut moved = Vec::new();
+        for r in rows {
+            if FailureClass::classify(r.error.as_deref().unwrap_or("")) != class {
+                continue;
+            }
+            let id = MediaFileId::from(r.id);
+            match self
+                .transition(
+                    &id,
+                    WorkflowStateTag::Failed,
+                    WorkflowStateTag::Discovered,
+                    &event,
+                )
+                .await
+            {
+                Ok(()) => moved.push(id),
+                // Lost the race (already moved) — skip, stay idempotent.
+                Err(StoreError::StaleState { .. }) => {}
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(moved)
+    }
+
     /// The most recent `transcode_failed` event, for the status snapshot.
     pub async fn fetch_last_failure(&self) -> Result<Option<FailureRecord>, StoreError> {
         let row = sqlx::query!(
@@ -1403,6 +1488,74 @@ mod tests {
         assert_eq!(failed_after - failed_before, 1);
 
         for id in [fail_movie, done_movie] {
+            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn requeue_failed_moves_only_matching_class() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+
+        // Two failed files with different failure causes.
+        let (perm_movie, perm_file) =
+            insert_movie_titled(&pool, "perm fail", WorkflowStateTag::Failed).await;
+        let (vp_movie, vp_file) =
+            insert_movie_titled(&pool, "vp fail", WorkflowStateTag::Failed).await;
+        for (file, error) in [
+            (perm_file, "swap failed: Permission denied (os error 13)"),
+            (vp_file, "video properties missing for media file"),
+        ] {
+            sqlx::query!(
+                r#"INSERT INTO events (media_file_id, event) VALUES ($1, $2)"#,
+                file,
+                serde_json::json!({ "type": "transcode_failed", "error": error }),
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Requeue only the permission-denied class.
+        let moved = store
+            .requeue_failed(FailureClass::SwapPermission)
+            .await
+            .unwrap();
+        assert_eq!(moved, vec![MediaFileId::from(perm_file)]);
+
+        // The permission file moved to discovered; the other class stays failed.
+        let perm_state = sqlx::query_scalar!(
+            r#"SELECT workflow_state AS "s: WorkflowStateTag" FROM media_files WHERE id = $1"#,
+            perm_file,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let vp_state = sqlx::query_scalar!(
+            r#"SELECT workflow_state AS "s: WorkflowStateTag" FROM media_files WHERE id = $1"#,
+            vp_file,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(perm_state, WorkflowStateTag::Discovered);
+        assert_eq!(vp_state, WorkflowStateTag::Failed);
+
+        // Idempotent: nothing left in that class to move.
+        let again = store
+            .requeue_failed(FailureClass::SwapPermission)
+            .await
+            .unwrap();
+        assert!(again.is_empty());
+
+        for id in [perm_movie, vp_movie] {
             sqlx::query!("DELETE FROM movies WHERE id = $1", id)
                 .execute(&pool)
                 .await

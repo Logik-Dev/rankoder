@@ -235,6 +235,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         join_set.spawn(http::serve(
             bind,
             cfg.webhook_token.clone(),
+            cfg.ui_control_token.clone(),
             store.clone(),
             sync_trigger.clone(),
             token.child_token(),
