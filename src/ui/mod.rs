@@ -10,7 +10,9 @@ use axum::{
 use serde::Deserialize;
 use tracing::{info, warn};
 
+use crate::models::RetentionFileId;
 use crate::store::{FailureClass, MediaStore};
+use crate::transcode::reaper::reap_retention;
 
 mod views;
 
@@ -22,6 +24,9 @@ mod views;
 struct UiState {
     store: Arc<MediaStore>,
     control_token: Option<Arc<String>>,
+    /// Quality bar for "confirmed" transcodes (`MIN_VMAF`): an original is only
+    /// offered for deletion when its encode scored at or above this.
+    min_vmaf: f64,
 }
 
 /// Operator dashboard, served from the same HTTP listener as the sync webhook.
@@ -31,10 +36,11 @@ struct UiState {
 /// of the loopback bind; `control_token` gates the mutating actions on top of
 /// that (and acts as a same-origin/CSRF guard since a cross-origin page cannot
 /// read it back to forge a POST).
-pub fn router(store: Arc<MediaStore>, control_token: Option<String>) -> Router {
+pub fn router(store: Arc<MediaStore>, control_token: Option<String>, min_vmaf: f64) -> Router {
     let state = UiState {
         store,
         control_token: control_token.map(Arc::new),
+        min_vmaf,
     };
 
     let mut router = Router::new()
@@ -42,7 +48,12 @@ pub fn router(store: Arc<MediaStore>, control_token: Option<String>) -> Router {
         .route("/static/style.css", get(stylesheet));
 
     if state.control_token.is_some() {
-        router = router.route("/actions/requeue-failed", post(requeue_failed));
+        router = router
+            .route("/actions/requeue-failed", post(requeue_failed))
+            .route(
+                "/actions/delete-confirmed-originals",
+                post(delete_confirmed_originals),
+            );
         info!("UI write actions enabled (UI_CONTROL_TOKEN set)");
     } else {
         info!("UI read-only (UI_CONTROL_TOKEN unset)");
@@ -51,11 +62,16 @@ pub fn router(store: Arc<MediaStore>, control_token: Option<String>) -> Router {
     router.with_state(state)
 }
 
-/// Flash message carried across the POST→redirect→GET, set by an action handler.
+/// Flash carried across the POST→redirect→GET, set by an action handler and
+/// rendered as a banner. At most one field is set per redirect.
 #[derive(Debug, Deserialize)]
 struct DashboardQuery {
-    /// Number of files affected by the last action, rendered as a banner.
+    /// Number of failed files requeued.
     requeued: Option<i64>,
+    /// Number of confirmed originals deleted.
+    deleted: Option<i64>,
+    /// GB freed by the deletion, paired with `deleted`.
+    freed_gb: Option<f64>,
 }
 
 async fn dashboard(
@@ -73,6 +89,10 @@ async fn dashboard(
         .await
         .unwrap_or_default();
     let failures = store.fetch_failure_breakdown().await.unwrap_or_default();
+    let retention = store
+        .fetch_retention_summary(state.min_vmaf)
+        .await
+        .unwrap_or_default();
     let vmaf = store.fetch_vmaf_distribution().await.unwrap_or_default();
     let last_failure = store.fetch_last_failure().await.ok().flatten();
 
@@ -86,10 +106,13 @@ async fn dashboard(
             backlog: &backlog,
             breakdown: &breakdown,
             failures: &failures,
+            retention: &retention,
+            min_vmaf: state.min_vmaf,
             vmaf: &vmaf,
             last_failure: last_failure.as_ref(),
             control,
             flash_requeued: query.requeued,
+            flash_deleted: query.deleted.zip(query.freed_gb),
         })
         .into_string(),
     )
@@ -133,6 +156,53 @@ async fn requeue_failed(
     );
 
     Ok(Redirect::to(&format!("/?requeued={}", moved.len())))
+}
+
+/// Token-only form body for actions that take no further parameters.
+#[derive(Debug, Deserialize)]
+struct TokenForm {
+    token: String,
+}
+
+/// Delete the originals of quality-confirmed transcodes (`done` + VMAF ≥
+/// `MIN_VMAF`) from retention, reclaiming their disk space. Verifies the token,
+/// then delegates to the shared reaper; on success redirects with a flash of the
+/// count and GB freed.
+async fn delete_confirmed_originals(
+    State(state): State<UiState>,
+    Form(form): Form<TokenForm>,
+) -> Result<Redirect, StatusCode> {
+    let expected = state
+        .control_token
+        .as_deref()
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if form.token != **expected {
+        warn!("delete-confirmed-originals rejected: bad control token");
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let confirmed = state
+        .store
+        .fetch_confirmed_originals(state.min_vmaf)
+        .await
+        .map_err(|e| {
+            warn!(%e, "delete-confirmed-originals: fetch failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let freed_bytes: i64 = confirmed.iter().map(|(_, _, size)| *size).sum();
+    let files: Vec<(RetentionFileId, String)> = confirmed
+        .into_iter()
+        .map(|(id, path, _)| (id, path))
+        .collect();
+
+    let deleted = reap_retention(&state.store, &files).await;
+    let freed_gb = freed_bytes as f64 / 1_000_000_000.0;
+    info!(deleted, freed_gb, "deleted confirmed originals");
+
+    Ok(Redirect::to(&format!(
+        "/?deleted={deleted}&freed_gb={freed_gb:.1}"
+    )))
 }
 
 async fn stylesheet() -> impl IntoResponse {

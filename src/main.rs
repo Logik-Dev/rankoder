@@ -236,6 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             bind,
             cfg.webhook_token.clone(),
             cfg.ui_control_token.clone(),
+            cfg.min_vmaf,
             store.clone(),
             sync_trigger.clone(),
             token.child_token(),

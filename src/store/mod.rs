@@ -67,6 +67,17 @@ pub struct Backlog {
     pub projected_saved_bytes: i64,
 }
 
+/// Originals still held in retention after a successful transcode, split by
+/// whether the encode's quality is confirmed (`done` + VMAF ≥ `min_vmaf`).
+/// `confirmed_*` are safe to delete; `held_*` are kept until verified.
+#[derive(Debug, Default)]
+pub struct RetentionSummary {
+    pub confirmed_count: i64,
+    pub confirmed_bytes: i64,
+    pub held_count: i64,
+    pub held_bytes: i64,
+}
+
 /// Coarse cause of a transcode failure. Drives the failure panel and, later,
 /// scopes a class-aware requeue: some classes (swap I/O errors) are
 /// environmental and need a host fix first, so requeuing them blindly just
@@ -1248,6 +1259,79 @@ impl MediaStore {
 
         Ok(())
     }
+
+    /// Originals still held in retention, split by whether their transcode's
+    /// quality is *confirmed*: the file is `done` and carries a recorded VMAF at
+    /// or above `min_vmaf`. Confirmed originals are safe to delete (the encode is
+    /// verified good); the rest — no VMAF yet, or below the bar — are kept until
+    /// verified. Drives the retention panel.
+    pub async fn fetch_retention_summary(
+        &self,
+        min_vmaf: f64,
+    ) -> Result<RetentionSummary, StoreError> {
+        let row = sqlx::query!(
+            r#"
+            SELECT
+                COUNT(*) FILTER (WHERE confirmed)                                  AS "confirmed_count!",
+                COALESCE(SUM(original_size_bytes) FILTER (WHERE confirmed), 0)::bigint     AS "confirmed_bytes!",
+                COUNT(*) FILTER (WHERE NOT confirmed)                              AS "held_count!",
+                COALESCE(SUM(original_size_bytes) FILTER (WHERE NOT confirmed), 0)::bigint AS "held_bytes!"
+            FROM (
+                SELECT rf.original_size_bytes,
+                       COALESCE(
+                           mf.workflow_state = 'done'
+                           AND (mf.transcode_spec->>'vmaf')::float8 >= $1,
+                           false
+                       ) AS confirmed
+                FROM retention_files rf
+                JOIN media_files mf ON mf.id = rf.media_file_id
+            ) t
+            "#,
+            min_vmaf,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(RetentionSummary {
+            confirmed_count: row.confirmed_count,
+            confirmed_bytes: row.confirmed_bytes,
+            held_count: row.held_count,
+            held_bytes: row.held_bytes,
+        })
+    }
+
+    /// Retention rows whose transcode is quality-confirmed (`done` + VMAF ≥
+    /// `min_vmaf`), i.e. the originals safe to delete. Returns `(id, path, size)`
+    /// so the caller can reap them and report freed bytes. A NULL VMAF fails the
+    /// `>=` comparison and is therefore excluded (kept).
+    pub async fn fetch_confirmed_originals(
+        &self,
+        min_vmaf: f64,
+    ) -> Result<Vec<(RetentionFileId, String, i64)>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT rf.id, rf.retained_path, rf.original_size_bytes
+            FROM retention_files rf
+            JOIN media_files mf ON mf.id = rf.media_file_id
+            WHERE mf.workflow_state = 'done'
+              AND (mf.transcode_spec->>'vmaf')::float8 >= $1
+            "#,
+            min_vmaf,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    RetentionFileId::from(r.id),
+                    r.retained_path,
+                    r.original_size_bytes,
+                )
+            })
+            .collect())
+    }
 }
 
 pub struct BatchApprovalInfo {
@@ -1556,6 +1640,59 @@ mod tests {
         assert!(again.is_empty());
 
         for id in [perm_movie, vp_movie] {
+            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn confirmed_originals_gated_on_min_vmaf() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+        let min_vmaf = 92.0;
+
+        let base = store.fetch_retention_summary(min_vmaf).await.unwrap();
+
+        // done + VMAF above the bar -> confirmed (deletable).
+        let (good_movie, good_file) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Done,
+            Some(serde_json::json!({ "vmaf": 95.0 })),
+        )
+        .await;
+        insert_retention(&pool, good_file, "/tmp/orig_good.mkv").await;
+        // done + VMAF below the bar -> held.
+        let (low_movie, low_file) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Done,
+            Some(serde_json::json!({ "vmaf": 80.0 })),
+        )
+        .await;
+        insert_retention(&pool, low_file, "/tmp/orig_low.mkv").await;
+        // done but no VMAF recorded -> held (can't confirm).
+        let (novmaf_movie, novmaf_file) =
+            insert_movie_spec(&pool, WorkflowStateTag::Done, Some(serde_json::json!({}))).await;
+        insert_retention(&pool, novmaf_file, "/tmp/orig_novmaf.mkv").await;
+
+        // Only the above-bar original is offered for deletion.
+        let confirmed = store.fetch_confirmed_originals(min_vmaf).await.unwrap();
+        let paths: Vec<&str> = confirmed.iter().map(|(_, p, _)| p.as_str()).collect();
+        assert!(paths.contains(&"/tmp/orig_good.mkv"));
+        assert!(!paths.contains(&"/tmp/orig_low.mkv"));
+        assert!(!paths.contains(&"/tmp/orig_novmaf.mkv"));
+
+        // Summary: +1 confirmed, +2 held against the baseline (#[serial]).
+        let after = store.fetch_retention_summary(min_vmaf).await.unwrap();
+        assert_eq!(after.confirmed_count - base.confirmed_count, 1);
+        assert_eq!(after.held_count - base.held_count, 2);
+
+        for id in [good_movie, low_movie, novmaf_movie] {
             sqlx::query!("DELETE FROM movies WHERE id = $1", id)
                 .execute(&pool)
                 .await

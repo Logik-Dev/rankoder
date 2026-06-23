@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT rf.id, rf.retained_path, rf.original_size_bytes\n            FROM retention_files rf\n            JOIN media_files mf ON mf.id = rf.media_file_id\n            WHERE mf.workflow_state = 'done'\n              AND (mf.transcode_spec->>'vmaf')::float8 >= $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "retention_files",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "retained_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "retention_files",
+            "name": "retained_path"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "original_size_bytes",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "retention_files",
+            "name": "original_size_bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "953699973daea7add2d1a0b491b96fd034beb26ad0a70a505b88c913576235c3"
+}

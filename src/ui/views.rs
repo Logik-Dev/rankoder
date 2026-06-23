@@ -2,7 +2,7 @@ use maud::{DOCTYPE, Markup, html};
 
 use crate::{
     models::workflow::WorkflowStateTag,
-    store::{Backlog, CodecStateBreakdown, FailureBreakdownRow, FailureRecord},
+    store::{Backlog, CodecStateBreakdown, FailureBreakdownRow, FailureRecord, RetentionSummary},
 };
 
 const BYTES_PER_GB: f64 = 1_000_000_000.0;
@@ -16,6 +16,10 @@ pub struct DashboardData<'a> {
     pub backlog: &'a Backlog,
     pub breakdown: &'a [CodecStateBreakdown],
     pub failures: &'a [FailureBreakdownRow],
+    pub retention: &'a RetentionSummary,
+    /// Quality bar (`MIN_VMAF`) defining a "confirmed" transcode, shown in the
+    /// retention panel label.
+    pub min_vmaf: f64,
     pub vmaf: &'a [(i32, i64)],
     pub last_failure: Option<&'a FailureRecord>,
     /// `Some(token)` when write actions are enabled: the dashboard then renders
@@ -24,12 +28,15 @@ pub struct DashboardData<'a> {
     pub control: Option<&'a str>,
     /// Flash: number of files requeued by the action that redirected here.
     pub flash_requeued: Option<i64>,
+    /// Flash: `(count, gb_freed)` of originals deleted by the last action.
+    pub flash_deleted: Option<(i64, f64)>,
 }
 
 /// The dashboard page: per-state counts, total space saved, the outstanding
-/// backlog, the codec×state breakdown, failures grouped by cause, the VMAF
-/// distribution and the most recent failure. Server-rendered, zero JS — a
-/// `<meta refresh>` keeps it live-ish without a build step.
+/// backlog, the codec×state breakdown, failures grouped by cause, originals
+/// held in retention, the VMAF distribution and the most recent failure.
+/// Server-rendered, zero JS — a `<meta refresh>` keeps it live-ish without a
+/// build step.
 pub fn dashboard(d: DashboardData<'_>) -> Markup {
     html! {
         (DOCTYPE)
@@ -50,6 +57,10 @@ pub fn dashboard(d: DashboardData<'_>) -> Markup {
 
                 @if let Some(n) = d.flash_requeued {
                     p.flash { "Requeued " (n) " file" @if n != 1 { "s" } " to discovered." }
+                }
+                @if let Some((n, gb)) = d.flash_deleted {
+                    p.flash { "Deleted " (n) " original" @if n != 1 { "s" }
+                        " (" (format!("{gb:.1}")) " GB freed)." }
                 }
 
                 section.tiles {
@@ -91,6 +102,8 @@ pub fn dashboard(d: DashboardData<'_>) -> Markup {
                         (failure_breakdown_table(d.failures, d.control))
                     }
                 }
+
+                (retention_panel(d.retention, d.min_vmaf, d.control))
 
                 section.failure {
                     h2 { "Last failure" }
@@ -167,6 +180,52 @@ fn backlog_panel(b: &Backlog) -> Markup {
                     span.n { (format!("{:.1}", b.projected_saved_bytes as f64 / BYTES_PER_GB)) }
                     span.unit { "GB" }
                     span.label { "projected savings" }
+                }
+            }
+        }
+    }
+}
+
+/// Originals held in retention after a successful transcode, split into the
+/// quality-confirmed set (safe to delete) and the rest (kept until verified).
+/// When `control` is set, the confirmed set gets a delete button.
+fn retention_panel(r: &RetentionSummary, min_vmaf: f64, control: Option<&str>) -> Markup {
+    let confirmed_gb = r.confirmed_bytes as f64 / BYTES_PER_GB;
+    let held_gb = r.held_bytes as f64 / BYTES_PER_GB;
+    html! {
+        section {
+            h2 { "Originals in retention" }
+            table.breakdown {
+                thead {
+                    tr {
+                        th { "set" }
+                        th.num { "files" }
+                        th.num { "size (GB)" }
+                        @if control.is_some() { th { "action" } }
+                    }
+                }
+                tbody {
+                    tr {
+                        td { "quality confirmed (VMAF ≥ " (format!("{min_vmaf:.0}")) ")" }
+                        td.num { (r.confirmed_count) }
+                        td.num { (format!("{confirmed_gb:.1}")) }
+                        @if let Some(token) = control {
+                            td {
+                                @if r.confirmed_count > 0 {
+                                    form method="post" action="/actions/delete-confirmed-originals" {
+                                        input type="hidden" name="token" value=(token);
+                                        button type="submit" { "Delete originals" }
+                                    }
+                                } @else { "—" }
+                            }
+                        }
+                    }
+                    tr {
+                        td.hint.warn { "unconfirmed / below bar (kept)" }
+                        td.num { (r.held_count) }
+                        td.num { (format!("{held_gb:.1}")) }
+                        @if control.is_some() { td { "—" } }
+                    }
                 }
             }
         }

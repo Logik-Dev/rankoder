@@ -4,7 +4,41 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, instrument, warn};
 
+use crate::models::RetentionFileId;
 use crate::store::MediaStore;
+
+/// Delete a batch of retention files from disk and DB. Best-effort per file: a
+/// missing file still drops its DB row (the on-disk copy is already gone); a
+/// disk error is logged and the row still removed, matching the scheduled
+/// reaper's long-standing behaviour. Returns how many rows were removed.
+/// Shared by the scheduled [`RetentionReaper`] and the on-demand UI action so
+/// the deletion logic lives in exactly one place.
+pub(crate) async fn reap_retention(
+    store: &MediaStore,
+    files: &[(RetentionFileId, String)],
+) -> usize {
+    let mut reaped = 0;
+    for (id, path) in files {
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                warn!(%path, "retention file already gone, cleaning DB entry");
+            }
+            Err(e) => {
+                error!(%e, %path, "failed to delete retention file from disk");
+            }
+        }
+
+        match store.delete_retention_file(id).await {
+            Ok(()) => {
+                reaped += 1;
+                info!(?id, %path, "retention file reaped");
+            }
+            Err(e) => error!(%e, ?id, "failed to delete retention row"),
+        }
+    }
+    reaped
+}
 
 pub struct RetentionReaper {
     store: Arc<MediaStore>,
@@ -61,21 +95,8 @@ impl RetentionReaper {
         }
 
         info!(count = expired.len(), "reaping expired retention files");
-
-        for (id, path) in expired {
-            match tokio::fs::remove_file(&path).await {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    warn!(%path, "retention file already gone, cleaning DB entry");
-                }
-                Err(e) => {
-                    error!(%e, %path, "failed to delete retention file from disk");
-                }
-            }
-
-            self.store.delete_retention_file(&id).await?;
-            info!(?id, %path, "expired retention file reaped");
-        }
+        let reaped = reap_retention(&self.store, &expired).await;
+        info!(reaped, "expired retention reap complete");
 
         Ok(())
     }
