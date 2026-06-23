@@ -34,6 +34,7 @@ async fn dashboard(State(store): State<Arc<MediaStore>>) -> Html<String> {
         .fetch_codec_state_breakdown()
         .await
         .unwrap_or_default();
+    let failures = store.fetch_failure_breakdown().await.unwrap_or_default();
     let vmaf = store.fetch_vmaf_distribution().await.unwrap_or_default();
     let last_failure = store.fetch_last_failure().await.ok().flatten();
 
@@ -43,6 +44,7 @@ async fn dashboard(State(store): State<Arc<MediaStore>>) -> Html<String> {
             saved,
             &backlog,
             &breakdown,
+            &failures,
             &vmaf,
             last_failure.as_ref(),
         )

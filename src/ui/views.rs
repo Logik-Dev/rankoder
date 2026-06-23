@@ -2,20 +2,21 @@ use maud::{DOCTYPE, Markup, html};
 
 use crate::{
     models::workflow::WorkflowStateTag,
-    store::{Backlog, CodecStateBreakdown, FailureRecord},
+    store::{Backlog, CodecStateBreakdown, FailureBreakdownRow, FailureRecord},
 };
 
 const BYTES_PER_GB: f64 = 1_000_000_000.0;
 
 /// The dashboard page: per-state counts, total space saved, the outstanding
-/// backlog, the codec×state breakdown, the VMAF distribution and the most
-/// recent failure. Server-rendered, zero JS — a `<meta refresh>` keeps it
-/// live-ish without a build step.
+/// backlog, the codec×state breakdown, failures grouped by cause, the VMAF
+/// distribution and the most recent failure. Server-rendered, zero JS — a
+/// `<meta refresh>` keeps it live-ish without a build step.
 pub fn dashboard(
     counts: &[(WorkflowStateTag, i64)],
     saved_bytes: i64,
     backlog: &Backlog,
     breakdown: &[CodecStateBreakdown],
+    failures: &[FailureBreakdownRow],
     vmaf: &[(i32, i64)],
     last_failure: Option<&FailureRecord>,
 ) -> Markup {
@@ -64,6 +65,15 @@ pub fn dashboard(
                         p.empty { "No measured scores yet." }
                     } @else {
                         (vmaf_histogram(vmaf))
+                    }
+                }
+
+                section {
+                    h2 { "Failures by cause" }
+                    @if failures.is_empty() {
+                        p.empty { "No failed files." }
+                    } @else {
+                        (failure_breakdown_table(failures))
                     }
                 }
 
@@ -174,6 +184,32 @@ fn breakdown_table(rows: &[CodecStateBreakdown]) -> Markup {
                         td { (label_for(r.state)) }
                         td.num { (r.count) }
                         td.num { (format!("{:.1}", r.total_bytes as f64 / BYTES_PER_GB)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Failure causes with counts. The hint column distinguishes classes a requeue
+/// can fix on its own from environmental ones that need a host/source fix first
+/// — so the operator doesn't burn encodes re-driving doomed files.
+fn failure_breakdown_table(rows: &[FailureBreakdownRow]) -> Markup {
+    html! {
+        table.breakdown {
+            thead {
+                tr { th { "cause" } th.num { "files" } th { "remediation" } }
+            }
+            tbody {
+                @for r in rows {
+                    tr {
+                        td { (r.class.label()) }
+                        td.num { (r.count) }
+                        @if r.class.auto_requeueable() {
+                            td.hint.ok { "requeue safe" }
+                        } @else {
+                            td.hint.warn { "needs host/source fix first" }
+                        }
                     }
                 }
             }

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT DISTINCT ON (mf.id) e.event->>'error' AS error\n            FROM media_files mf\n            JOIN events e\n              ON e.media_file_id = mf.id\n             AND e.event->>'type' = 'transcode_failed'\n            WHERE mf.workflow_state = 'failed'\n            ORDER BY mf.id, e.id DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "error",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2caa4a57c3ff802b529367185c6c34753118f74e0bb8b05381aee0cd6b0193d1"
+}

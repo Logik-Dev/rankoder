@@ -109,6 +109,10 @@ table.breakdown th {
 table.breakdown tbody tr:last-child td { border-bottom: none; }
 table.breakdown .num { text-align: right; }
 
+table.breakdown .hint { font-size: 0.8rem; }
+table.breakdown .hint.ok { color: var(--accent); }
+table.breakdown .hint.warn { color: var(--fail); }
+
 .histogram {
   display: flex;
   align-items: flex-end;

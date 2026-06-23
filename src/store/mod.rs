@@ -67,6 +67,75 @@ pub struct Backlog {
     pub projected_saved_bytes: i64,
 }
 
+/// Coarse cause of a transcode failure. Drives the failure panel and, later,
+/// scopes a class-aware requeue: some classes (swap I/O errors) are
+/// environmental and need a host fix first, so requeuing them blindly just
+/// burns an encode and re-fails — only `auto_requeueable` classes are safe to
+/// re-drive on their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FailureClass {
+    /// `MissingVideoProperties`: ffprobe data was never (or no longer) present.
+    /// Re-driving through `discovered` re-probes and repopulates it.
+    MissingVideoProperties,
+    /// `rename(2)` denied — directory not writable by the service user.
+    SwapPermission,
+    /// Target filesystem mounted read-only (sandbox or mount issue).
+    SwapReadOnly,
+    /// `rename(2)` across filesystems (e.g. mergerfs branches).
+    SwapCrossDevice,
+    /// The encode itself failed (bad source, unsupported feature, …).
+    Ffmpeg,
+    /// Anything not matched above.
+    Other,
+}
+
+impl FailureClass {
+    /// Map a failure `error` string to its class via substring match. The
+    /// substrings are the stable parts of the messages emitted on the transcode
+    /// path (`swap failed: <io::Error>`, `MissingVideoProperties`, etc.).
+    pub fn classify(error: &str) -> Self {
+        if error.contains("video properties missing") {
+            Self::MissingVideoProperties
+        } else if error.contains("Permission denied") {
+            Self::SwapPermission
+        } else if error.contains("Read-only file system") {
+            Self::SwapReadOnly
+        } else if error.contains("cross-device") {
+            Self::SwapCrossDevice
+        } else if error.contains("ffmpeg failed") {
+            Self::Ffmpeg
+        } else {
+            Self::Other
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::MissingVideoProperties => "missing video properties",
+            Self::SwapPermission => "swap: permission denied",
+            Self::SwapReadOnly => "swap: read-only filesystem",
+            Self::SwapCrossDevice => "swap: cross-device link",
+            Self::Ffmpeg => "ffmpeg encode failed",
+            Self::Other => "other",
+        }
+    }
+
+    /// Whether a plain requeue can resolve it. Swap I/O classes are
+    /// environmental: they need a host/config fix before re-driving, otherwise
+    /// the file re-encodes only to fail again at the swap.
+    pub fn auto_requeueable(self) -> bool {
+        matches!(self, Self::MissingVideoProperties)
+    }
+}
+
+/// One row of the failure panel: a cause and how many currently-`failed` files
+/// carry it (counted from each file's most recent `transcode_failed` event).
+#[derive(Debug)]
+pub struct FailureBreakdownRow {
+    pub class: FailureClass,
+    pub count: i64,
+}
+
 impl MediaStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -837,6 +906,40 @@ impl MediaStore {
                 error: r.error.unwrap_or_default(),
             })
             .collect())
+    }
+
+    /// Failure causes across the currently-`failed` files, grouped by class.
+    /// Takes each file's most recent `transcode_failed` event (a file may have
+    /// several from retries) and folds the errors into [`FailureClass`] counts,
+    /// ordered by descending count. Read-only; drives the dashboard panel.
+    pub async fn fetch_failure_breakdown(&self) -> Result<Vec<FailureBreakdownRow>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT DISTINCT ON (mf.id) e.event->>'error' AS error
+            FROM media_files mf
+            JOIN events e
+              ON e.media_file_id = mf.id
+             AND e.event->>'type' = 'transcode_failed'
+            WHERE mf.workflow_state = 'failed'
+            ORDER BY mf.id, e.id DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut counts: HashMap<FailureClass, i64> = HashMap::new();
+        for r in rows {
+            let class = FailureClass::classify(r.error.as_deref().unwrap_or(""));
+            *counts.entry(class).or_insert(0) += 1;
+        }
+
+        let mut breakdown: Vec<FailureBreakdownRow> = counts
+            .into_iter()
+            .map(|(class, count)| FailureBreakdownRow { class, count })
+            .collect();
+        breakdown.sort_by_key(|b| std::cmp::Reverse(b.count));
+
+        Ok(breakdown)
     }
 
     /// The most recent `transcode_failed` event, for the status snapshot.
