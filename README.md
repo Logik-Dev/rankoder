@@ -85,15 +85,23 @@ for machine callers.
 ### Remediation actions
 
 The dashboard is read-only by default. Setting **`UI_CONTROL_TOKEN`** (in
-`environmentFile`) unlocks the mutating actions — currently a per-cause
-**Requeue** button on the failures panel, which moves the failed files of a
-given class back to `discovered` so the pipeline re-probes and re-drives them.
+`environmentFile`) unlocks the mutating actions:
 
-The failures panel labels each cause: `missing video properties` is
-*requeue-safe* (a re-probe repopulates it), while swap I/O errors (permission
-denied, read-only filesystem, cross-device) are environmental — **fix the host
-first** (e.g. directory permissions), otherwise the file just re-encodes and
-fails again at the swap.
+- **Requeue failed (per cause).** On the failures panel, a button per cause
+  moves the failed files of a given class back to `discovered` so the pipeline
+  re-probes and re-drives them. The panel labels each cause: `missing video
+  properties` is *requeue-safe* (a re-probe repopulates it), while swap I/O
+  errors (permission denied, read-only filesystem, cross-device) are
+  environmental — **fix the host first** (e.g. directory permissions), otherwise
+  the file just re-encodes and fails again at the swap.
+
+- **Delete confirmed originals.** After a successful transcode the original is
+  held in retention for a safety window (`retentionDays`) before the reaper
+  prunes it. The retention panel splits held originals into *quality-confirmed*
+  (`done` **and** VMAF ≥ `MIN_VMAF`) versus held, and a **Delete originals**
+  button reclaims the confirmed set's disk space immediately. Originals with no
+  recorded VMAF or a score below the bar are kept — so under `MIN_VMAF=0`
+  (observe-only) nothing is offered for deletion until a real bar is set.
 
 When `UI_CONTROL_TOKEN` is unset the `/actions/*` routes are not mounted and the
 dashboard stays strictly read-only. When set, the token is embedded as a hidden
@@ -461,9 +469,10 @@ ones open new fronts.
 3. **Maintenance UI (phase 2).** In progress — mutating [remediation
    actions](#remediation-actions) on the same dashboard (plain HTML forms, gated
    by `UI_CONTROL_TOKEN`), replacing the one-shot env flags and NixOS rebuilds.
-   Done: per-cause failure **requeue**. Next: approve/reject batches from the UI
-   (the biggest lever — unblocks the h264 backlog stuck behind MQTT approval),
-   on-demand VMAF backfill / requeue-quality-skips, re-analyse skips.
+   Done: per-cause failure **requeue**, **delete quality-confirmed originals**
+   from retention. Next: approve/reject batches from the UI (the biggest lever —
+   unblocks the h264 backlog stuck behind MQTT approval), on-demand VMAF backfill
+   / requeue-quality-skips, re-analyse skips.
 
 ### Codec coverage
 
