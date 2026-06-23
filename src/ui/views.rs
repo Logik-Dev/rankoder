@@ -1,15 +1,21 @@
 use maud::{DOCTYPE, Markup, html};
 
-use crate::{models::workflow::WorkflowStateTag, store::FailureRecord};
+use crate::{
+    models::workflow::WorkflowStateTag,
+    store::{Backlog, CodecStateBreakdown, FailureRecord},
+};
 
 const BYTES_PER_GB: f64 = 1_000_000_000.0;
 
-/// The dashboard page: per-state counts, total space saved, the VMAF
-/// distribution and the most recent failure. Server-rendered, zero JS — a
-/// `<meta refresh>` keeps it live-ish without a build step.
+/// The dashboard page: per-state counts, total space saved, the outstanding
+/// backlog, the codec×state breakdown, the VMAF distribution and the most
+/// recent failure. Server-rendered, zero JS — a `<meta refresh>` keeps it
+/// live-ish without a build step.
 pub fn dashboard(
     counts: &[(WorkflowStateTag, i64)],
     saved_bytes: i64,
+    backlog: &Backlog,
+    breakdown: &[CodecStateBreakdown],
     vmaf: &[(i32, i64)],
     last_failure: Option<&FailureRecord>,
 ) -> Markup {
@@ -38,6 +44,17 @@ pub fn dashboard(
                         span.n { (format!("{:.1}", saved_bytes as f64 / BYTES_PER_GB)) }
                         span.unit { "GB" }
                         span.label { "space saved" }
+                    }
+                }
+
+                (backlog_panel(backlog))
+
+                section {
+                    h2 { "By codec & state" }
+                    @if breakdown.is_empty() {
+                        p.empty { "Nothing ingested yet." }
+                    } @else {
+                        (breakdown_table(breakdown))
                     }
                 }
 
@@ -108,6 +125,58 @@ fn tile(label: &str, count: i64) -> Markup {
         div.tile {
             span.n { (count) }
             span.label { (label) }
+        }
+    }
+}
+
+/// The outstanding work: files decided but not yet transcoded, framed so the
+/// "space saved" tile reads against what is still to gain.
+fn backlog_panel(b: &Backlog) -> Markup {
+    html! {
+        section {
+            h2 { "Backlog (analyzed → transcoding)" }
+            div.tiles {
+                (tile_unit(&b.file_count.to_string(), "", "files queued"))
+                (tile_unit(&format!("{:.1}", b.total_bytes as f64 / BYTES_PER_GB), "GB", "queued size"))
+                div.tile.projected {
+                    span.n { (format!("{:.1}", b.projected_saved_bytes as f64 / BYTES_PER_GB)) }
+                    span.unit { "GB" }
+                    span.label { "projected savings" }
+                }
+            }
+        }
+    }
+}
+
+/// A tile with an explicit unit + label (parallel to the inline `.saved` tile).
+fn tile_unit(n: &str, unit: &str, label: &str) -> Markup {
+    html! {
+        div.tile {
+            span.n { (n) }
+            @if !unit.is_empty() { span.unit { (unit) } }
+            span.label { (label) }
+        }
+    }
+}
+
+/// Rows of `codec · state · count · size`, ordered as the store returns them
+/// (codec, then descending count). Size is shown in GB to one decimal.
+fn breakdown_table(rows: &[CodecStateBreakdown]) -> Markup {
+    html! {
+        table.breakdown {
+            thead {
+                tr { th { "codec" } th { "state" } th.num { "files" } th.num { "size (GB)" } }
+            }
+            tbody {
+                @for r in rows {
+                    tr {
+                        td { (r.codec) }
+                        td { (label_for(r.state)) }
+                        td.num { (r.count) }
+                        td.num { (format!("{:.1}", r.total_bytes as f64 / BYTES_PER_GB)) }
+                    }
+                }
+            }
         }
     }
 }

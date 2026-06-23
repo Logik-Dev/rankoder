@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COUNT(*) AS \"file_count!\",\n                   COALESCE(SUM(size_bytes), 0)::bigint AS \"total_bytes!\",\n                   COALESCE(SUM(\n                       size_bytes\n                       * GREATEST(LEAST(COALESCE((transcode_spec->>'estimated_saving_ratio')::float8, 0), 1), 0)\n                   ), 0)::bigint AS \"projected_saved_bytes!\"\n            FROM media_files\n            WHERE workflow_state IN ('analyzed', 'pending_approval', 'transcoding')\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "file_count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "projected_saved_bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "5bc4656076a9c149a2be04727eded1273a9749ac719106e61efd2aad9e377861"
+}

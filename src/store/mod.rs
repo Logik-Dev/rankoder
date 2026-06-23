@@ -44,6 +44,29 @@ pub struct FailureRecord {
     pub error: String,
 }
 
+/// One `(codec, state)` cell of the dashboard breakdown: how many files and how
+/// many bytes sit in each codec/workflow-state combination. Lets the operator
+/// see *why* the saved figure is what it is (e.g. all `done` is HEVC→HEVC while
+/// the h264 backlog waits in `analyzed`/`pending_approval`).
+#[derive(Debug)]
+pub struct CodecStateBreakdown {
+    pub codec: String,
+    pub state: WorkflowStateTag,
+    pub count: i64,
+    pub total_bytes: i64,
+}
+
+/// Work that is decided but not yet realised: files in `analyzed`,
+/// `pending_approval` or `transcoding`. `projected_saved_bytes` uses the
+/// `estimated_saving_ratio` already stored at analysis time, so the dashboard
+/// can reframe "space saved so far" against "space still to gain".
+#[derive(Debug, Default)]
+pub struct Backlog {
+    pub file_count: i64,
+    pub total_bytes: i64,
+    pub projected_saved_bytes: i64,
+}
+
 impl MediaStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -669,6 +692,63 @@ impl MediaStore {
         .await?;
 
         Ok(rows.into_iter().map(|r| (r.state, r.count)).collect())
+    }
+
+    /// Files and bytes per `(codec, state)`, ordered by codec then descending
+    /// count. Files with no probed codec yet collapse into `(unknown)`.
+    pub async fn fetch_codec_state_breakdown(
+        &self,
+    ) -> Result<Vec<CodecStateBreakdown>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT COALESCE(video_codec, '(unknown)') AS "codec!",
+                   workflow_state AS "state: WorkflowStateTag",
+                   COUNT(*) AS "count!",
+                   COALESCE(SUM(size_bytes), 0)::bigint AS "total_bytes!"
+            FROM media_files
+            GROUP BY 1, 2
+            ORDER BY 1, 3 DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| CodecStateBreakdown {
+                codec: r.codec,
+                state: r.state,
+                count: r.count,
+                total_bytes: r.total_bytes,
+            })
+            .collect())
+    }
+
+    /// Decided-but-not-realised work (`analyzed` + `pending_approval` +
+    /// `transcoding`): file count, total bytes and projected savings from the
+    /// stored `estimated_saving_ratio` (clamped to [0, 1], same as the approval
+    /// estimate).
+    pub async fn fetch_backlog(&self) -> Result<Backlog, StoreError> {
+        let row = sqlx::query!(
+            r#"
+            SELECT COUNT(*) AS "file_count!",
+                   COALESCE(SUM(size_bytes), 0)::bigint AS "total_bytes!",
+                   COALESCE(SUM(
+                       size_bytes
+                       * GREATEST(LEAST(COALESCE((transcode_spec->>'estimated_saving_ratio')::float8, 0), 1), 0)
+                   ), 0)::bigint AS "projected_saved_bytes!"
+            FROM media_files
+            WHERE workflow_state IN ('analyzed', 'pending_approval', 'transcoding')
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(Backlog {
+            file_count: row.file_count,
+            total_bytes: row.total_bytes,
+            projected_saved_bytes: row.projected_saved_bytes,
+        })
     }
 
     /// Distribution of recorded VMAF scores, rounded to the nearest integer, as

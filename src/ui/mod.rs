@@ -29,10 +29,25 @@ async fn dashboard(State(store): State<Arc<MediaStore>>) -> Html<String> {
     // a 500, so a transient DB hiccup never blanks the whole dashboard.
     let counts = store.fetch_state_counts().await.unwrap_or_default();
     let saved = store.fetch_total_space_saved_bytes().await.unwrap_or(0);
+    let backlog = store.fetch_backlog().await.unwrap_or_default();
+    let breakdown = store
+        .fetch_codec_state_breakdown()
+        .await
+        .unwrap_or_default();
     let vmaf = store.fetch_vmaf_distribution().await.unwrap_or_default();
     let last_failure = store.fetch_last_failure().await.ok().flatten();
 
-    Html(views::dashboard(&counts, saved, &vmaf, last_failure.as_ref()).into_string())
+    Html(
+        views::dashboard(
+            &counts,
+            saved,
+            &backlog,
+            &breakdown,
+            &vmaf,
+            last_failure.as_ref(),
+        )
+        .into_string(),
+    )
 }
 
 async fn stylesheet() -> impl IntoResponse {

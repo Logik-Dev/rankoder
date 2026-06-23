@@ -1,0 +1,63 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE(video_codec, '(unknown)') AS \"codec!\",\n                   workflow_state AS \"state: WorkflowStateTag\",\n                   COUNT(*) AS \"count!\",\n                   COALESCE(SUM(size_bytes), 0)::bigint AS \"total_bytes!\"\n            FROM media_files\n            GROUP BY 1, 2\n            ORDER BY 1, 3 DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "codec!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "state: WorkflowStateTag",
+        "type_info": {
+          "Custom": {
+            "name": "workflow_state",
+            "kind": {
+              "Enum": [
+                "discovered",
+                "probed",
+                "analyzed",
+                "pending_approval",
+                "transcoding",
+                "done",
+                "skipped",
+                "failed"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "media_files",
+            "name": "workflow_state"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "317e513001424932a3390f0b66eaaae81133f8e70bd5169bccf336ba0b38bded"
+}
