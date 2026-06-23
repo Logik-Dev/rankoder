@@ -124,6 +124,14 @@ in
         esac
       done
 
+      # Start a fresh working copy for the release artifacts (bump + changelog)
+      # *before* anything else. This is what keeps a described feature on @ from
+      # being clobbered: without it, the later `jj describe -m "chore(release)"`
+      # overwrote the feature's own message and merged it into the release
+      # commit. As a bonus, the feature commit is now @- (in HEAD's ancestry), so
+      # `git-cliff --bumped-version` sees it and infers feat→minor correctly.
+      jj new
+
       if [ -n "''${args[0]:-}" ]; then
         ver="''${args[0]#v}"
       else
