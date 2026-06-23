@@ -69,17 +69,38 @@ Configure the callers to `POST http://127.0.0.1:8765/sync` with header
 
 ## Dashboard
 
-When the HTTP server is enabled (`http.enable`), `GET /` serves a read-only
-operator dashboard: per-state file counts, total space saved, the VMAF score
-distribution and the most recent failure. It is server-rendered (no JavaScript,
-no build step) and reads straight through the app's database pool, so there is
-nothing extra to deploy — it ships inside the binary. The page refreshes itself
-every 60s.
+When the HTTP server is enabled (`http.enable`), `GET /` serves an operator
+dashboard: per-state file counts, total space saved, the outstanding **backlog**
+(files decided but not yet transcoded, with projected savings), a **codec ×
+state** breakdown, **failures grouped by cause**, the VMAF score distribution and
+the most recent failure. It is server-rendered (no JavaScript, no build step) and
+reads straight through the app's database pool, so there is nothing extra to
+deploy — it ships inside the binary. The page refreshes itself every 60s.
 
 The UI has **no authentication of its own**: keep the bind on loopback
 (`http.address`, default `127.0.0.1`) and put it behind your reverse proxy,
 which handles auth. The `/sync` webhook keeps its own `X-Rankoder-Token` gate
 for machine callers.
+
+### Remediation actions
+
+The dashboard is read-only by default. Setting **`UI_CONTROL_TOKEN`** (in
+`environmentFile`) unlocks the mutating actions — currently a per-cause
+**Requeue** button on the failures panel, which moves the failed files of a
+given class back to `discovered` so the pipeline re-probes and re-drives them.
+
+The failures panel labels each cause: `missing video properties` is
+*requeue-safe* (a re-probe repopulates it), while swap I/O errors (permission
+denied, read-only filesystem, cross-device) are environmental — **fix the host
+first** (e.g. directory permissions), otherwise the file just re-encodes and
+fails again at the swap.
+
+When `UI_CONTROL_TOKEN` is unset the `/actions/*` routes are not mounted and the
+dashboard stays strictly read-only. When set, the token is embedded as a hidden
+field in each action form and verified on POST: defence in depth on top of the
+proxy, and a same-origin guard (a cross-origin page cannot read the token to
+forge the request). Actions are plain HTML forms with POST-redirect-GET, so the
+zero-JS, no-build property holds.
 
 ## Monitoring (MQTT / Home Assistant)
 
@@ -368,6 +389,7 @@ Add the flake as an input and import the module:
 | `syncInterval` | `3600` | Periodic library re-sync cadence in seconds (`SYNC_INTERVAL_SECS`). `0` = startup + webhook only |
 | `http.enable` | `false` | Run the HTTP server: operator [dashboard](#dashboard) (`GET /`) + sync webhook (`POST /sync`). The webhook needs `WEBHOOK_TOKEN` in `environmentFile`; without it the UI is still served |
 | `http.address` / `http.port` | `127.0.0.1` / `8765` | Bind address for the HTTP server (`HTTP_BIND`). Keep on loopback behind a reverse proxy |
+| `UI_CONTROL_TOKEN` | unset | **Secret** (set in `environmentFile`, not a module option): unlocks the dashboard's mutating [remediation actions](#remediation-actions) (failure requeue). Unset = strictly read-only UI |
 | `minVmaf` | `0.0` | Post-encode VMAF quality gate (`MIN_VMAF`). `0` = observe only (measure + record, never reject); set > 0 (e.g. `92`) to reject encodes below it |
 | `backfillVmaf` | `false` | One-shot: score `done` files that predate the VMAF gate (`BACKFILL_VMAF`). Enable → deploy once → disable |
 | `requeueQualitySkips` | `false` | One-shot: re-encode `QualityTooLow` skips that now clear `MIN_VMAF` (`REQUEUE_QUALITY_SKIPS`). Enable → deploy once → disable |
@@ -432,13 +454,16 @@ ones open new fronts.
    PTS aligned, log path made filename-safe) and the recorded distribution is
    clean (~94–97). Finish the backfill rattrapage, then set `minVmaf ≈ 92` to
    move the gate from *observe* to *protect* for new transcodes.
-2. **Stats UI (phase 1).** A read-only dashboard for the data already in
-   Postgres (`space_saved_gb`, VMAF distribution, per-state counts). Grafana on
-   Postgres behind the existing reverse-proxy — no Rust changes.
-3. **Maintenance UI (phase 2).** An HTTP API inside the binary (axum) + an
-   Angular SPA to drive operations on demand — requeue, force-skip, trigger a
-   backfill, inspect/retry `failed` — replacing the one-shot env flags and
-   NixOS rebuilds.
+2. **Stats UI (phase 1).** ✅ Done — a server-rendered [dashboard](#dashboard)
+   inside the binary (axum + maud, zero JS): per-state counts, space saved,
+   backlog with projected savings, codec × state breakdown, failures by cause,
+   VMAF distribution.
+3. **Maintenance UI (phase 2).** In progress — mutating [remediation
+   actions](#remediation-actions) on the same dashboard (plain HTML forms, gated
+   by `UI_CONTROL_TOKEN`), replacing the one-shot env flags and NixOS rebuilds.
+   Done: per-cause failure **requeue**. Next: approve/reject batches from the UI
+   (the biggest lever — unblocks the h264 backlog stuck behind MQTT approval),
+   on-demand VMAF backfill / requeue-quality-skips, re-analyse skips.
 
 ### Codec coverage
 
