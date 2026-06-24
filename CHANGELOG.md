@@ -6,6 +6,12 @@ its *operational contract* (NixOS module options, environment variables, MQTT
 topics/payloads, DB migrations) rather than a Rust API.
 
 
+## [0.2.7] - 2026-06-24
+
+### Features
+
+- **ui:** Re-verify quality skips from the dashboard
+
 ## [0.2.6] - 2026-06-24
 
 ### Features
