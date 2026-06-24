@@ -68,7 +68,11 @@ pub fn router(
                 post(delete_confirmed_originals),
             )
             .route("/actions/approve-batch", post(approve_batch))
-            .route("/actions/reject-batch", post(reject_batch));
+            .route("/actions/reject-batch", post(reject_batch))
+            .route(
+                "/actions/recheck-quality-skips",
+                post(recheck_quality_skips),
+            );
         info!("UI write actions enabled (UI_CONTROL_TOKEN set)");
     } else {
         info!("UI read-only (UI_CONTROL_TOKEN unset)");
@@ -91,6 +95,8 @@ struct DashboardQuery {
     approved: Option<String>,
     /// Title of the batch just rejected (→ skipped).
     rejected: Option<String>,
+    /// Number of quality skips requeued for a re-encode + VMAF re-measure.
+    rechecked: Option<i64>,
 }
 
 /// Percent-encode a flash title for the redirect query string, without pulling
@@ -131,6 +137,7 @@ async fn dashboard(
     let vmaf = store.fetch_vmaf_distribution().await.unwrap_or_default();
     let last_failure = store.fetch_last_failure().await.ok().flatten();
     let pending = store.fetch_pending_batches().await.unwrap_or_default();
+    let quality_skips = store.fetch_quality_skip_summary().await.unwrap_or_default();
 
     // Token is embedded server-side into action forms only when control is on.
     let control = state.control_token.as_deref().map(String::as_str);
@@ -145,6 +152,7 @@ async fn dashboard(
             retention: &retention,
             min_vmaf: state.min_vmaf,
             vmaf: &vmaf,
+            quality_skips: &quality_skips,
             last_failure: last_failure.as_ref(),
             pending: &pending,
             control,
@@ -152,6 +160,7 @@ async fn dashboard(
             flash_deleted: query.deleted.zip(query.freed_gb),
             flash_approved: query.approved.as_deref(),
             flash_rejected: query.rejected.as_deref(),
+            flash_rechecked: query.rechecked,
         })
         .into_string(),
     )
@@ -242,6 +251,37 @@ async fn delete_confirmed_originals(
     Ok(Redirect::to(&format!(
         "/?deleted={deleted}&freed_gb={freed_gb:.1}"
     )))
+}
+
+/// Re-verify the quality-rejected files: flip every `skipped`-on-VMAF file back
+/// to `transcoding` so the orchestrator re-encodes them, re-measures the VMAF
+/// (correctly now) and re-applies `MIN_VMAF`. Unlike a threshold-based requeue,
+/// the stored score is ignored — the point is to recompute it. Verifies the
+/// token, delegates to the store (no raw SQL here), then redirects with a flash
+/// count. The orchestrator's stale re-queue picks the rows up; no channel send.
+async fn recheck_quality_skips(
+    State(state): State<UiState>,
+    Form(form): Form<TokenForm>,
+) -> Result<Redirect, StatusCode> {
+    let expected = state
+        .control_token
+        .as_deref()
+        .ok_or(StatusCode::NOT_FOUND)?;
+    if form.token != **expected {
+        warn!("recheck-quality-skips rejected: bad control token");
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let requeued = state.store.recheck_quality_skips().await.map_err(|e| {
+        warn!(%e, "recheck-quality-skips failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    info!(
+        n = requeued.len(),
+        "requeued quality skips for VMAF re-measure"
+    );
+
+    Ok(Redirect::to(&format!("/?rechecked={}", requeued.len())))
 }
 
 /// Form body of an approve/reject action: the shared token plus the encoded

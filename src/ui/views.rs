@@ -4,7 +4,7 @@ use crate::{
     models::{batch::BatchKey, workflow::WorkflowStateTag},
     store::{
         Backlog, BatchApprovalInfo, CodecStateBreakdown, FailureBreakdownRow, FailureRecord,
-        RetentionSummary,
+        QualitySkipSummary, RetentionSummary,
     },
 };
 
@@ -24,6 +24,9 @@ pub struct DashboardData<'a> {
     /// retention panel label.
     pub min_vmaf: f64,
     pub vmaf: &'a [(i32, i64)],
+    /// Quality-rejected files (`skipped` on VMAF), offered for a re-encode +
+    /// VMAF re-measure when `control` is set.
+    pub quality_skips: &'a QualitySkipSummary,
     pub last_failure: Option<&'a FailureRecord>,
     /// Batches in `pending_approval`, oldest first, with their request info.
     /// Rendered with Approve/Reject forms when `control` is set.
@@ -40,6 +43,8 @@ pub struct DashboardData<'a> {
     pub flash_approved: Option<&'a str>,
     /// Flash: title of the batch just rejected (→ skipped).
     pub flash_rejected: Option<&'a str>,
+    /// Flash: number of quality skips requeued for a re-encode + VMAF re-measure.
+    pub flash_rechecked: Option<i64>,
 }
 
 /// The dashboard page: per-state counts, total space saved, the outstanding
@@ -78,6 +83,10 @@ pub fn dashboard(d: DashboardData<'_>) -> Markup {
                 @if let Some(title) = d.flash_rejected {
                     p.flash { "Rejected “" (title) "” → skipped." }
                 }
+                @if let Some(n) = d.flash_rechecked {
+                    p.flash { "Requeued " (n) " quality skip" @if n != 1 { "s" }
+                        " for a re-encode & VMAF re-measure." }
+                }
 
                 section.tiles {
                     @for state in ALL_STATES {
@@ -111,6 +120,8 @@ pub fn dashboard(d: DashboardData<'_>) -> Markup {
                         (vmaf_histogram(d.vmaf))
                     }
                 }
+
+                (quality_skips_panel(d.quality_skips, d.control))
 
                 section {
                     h2 { "Failures by cause" }
@@ -302,6 +313,48 @@ fn retention_panel(r: &RetentionSummary, min_vmaf: f64, control: Option<&str>) -
                         td.num { (r.held_count) }
                         td.num { (format!("{held_gb:.1}")) }
                         @if control.is_some() { td { "—" } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Files rejected on the VMAF gate, with the originals' size (what a successful
+/// re-verify would reclaim). When `control` is set, a "Re-verify" button flips
+/// them back to `transcoding` for a fresh re-encode + VMAF re-measure — used to
+/// recover good encodes whose stored score was a measurement artefact, without
+/// trusting that stale score.
+fn quality_skips_panel(s: &QualitySkipSummary, control: Option<&str>) -> Markup {
+    html! {
+        section {
+            h2 { "Quality skips" }
+            @if s.count == 0 {
+                p.empty { "No files rejected on VMAF." }
+            } @else {
+                table.breakdown {
+                    thead {
+                        tr {
+                            th { "set" }
+                            th.num { "files" }
+                            th.num { "size (GB)" }
+                            @if control.is_some() { th { "action" } }
+                        }
+                    }
+                    tbody {
+                        tr {
+                            td { "rejected on VMAF (re-encode to re-measure)" }
+                            td.num { (s.count) }
+                            td.num { (format!("{:.1}", s.total_bytes as f64 / BYTES_PER_GB)) }
+                            @if let Some(token) = control {
+                                td {
+                                    form method="post" action="/actions/recheck-quality-skips" {
+                                        input type="hidden" name="token" value=(token);
+                                        button type="submit" { "Re-verify" }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

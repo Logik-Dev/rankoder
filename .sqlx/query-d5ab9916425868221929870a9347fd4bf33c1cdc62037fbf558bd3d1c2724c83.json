@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT COUNT(*) AS \"count!\",\n                       COALESCE(SUM(size_bytes), 0)::bigint AS \"total_bytes!\"\n                FROM media_files\n                WHERE workflow_state = 'skipped'\n                  AND jsonb_exists(transcode_spec, 'vmaf')\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "total_bytes!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "d5ab9916425868221929870a9347fd4bf33c1cdc62037fbf558bd3d1c2724c83"
+}

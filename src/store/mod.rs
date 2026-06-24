@@ -78,6 +78,17 @@ pub struct RetentionSummary {
     pub held_bytes: i64,
 }
 
+/// The quality-rejected population: files left in `skipped` because their
+/// post-encode VMAF was below `MIN_VMAF`. Identified by carrying a recorded VMAF
+/// (the only `skipped` files that do — analysis-stage skips never encode, and
+/// the size-reduction skip returns before VMAF is measured). `total_bytes` is
+/// the originals' size, i.e. the space a successful re-verify would reclaim.
+#[derive(Debug, Default)]
+pub struct QualitySkipSummary {
+    pub count: i64,
+    pub total_bytes: i64,
+}
+
 /// Coarse cause of a transcode failure. Drives the failure panel and, later,
 /// scopes a class-aware requeue: some classes (swap I/O errors) are
 /// environmental and need a host fix first, so requeuing them blindly just
@@ -1283,6 +1294,54 @@ impl MediaStore {
         Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
     }
 
+    /// Count and original size of the quality-rejected population (`skipped`
+    /// files carrying a recorded VMAF, i.e. a post-encode `QualityTooLow`).
+    /// Drives the "Quality skips" panel; pairs with [`Self::recheck_quality_skips`].
+    pub async fn fetch_quality_skip_summary(&self) -> Result<QualitySkipSummary, StoreError> {
+        let row = sqlx::query!(
+            r#"
+                SELECT COUNT(*) AS "count!",
+                       COALESCE(SUM(size_bytes), 0)::bigint AS "total_bytes!"
+                FROM media_files
+                WHERE workflow_state = 'skipped'
+                  AND jsonb_exists(transcode_spec, 'vmaf')
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(QualitySkipSummary {
+            count: row.count,
+            total_bytes: row.total_bytes,
+        })
+    }
+
+    /// Re-verify quality-rejected files: flip every `skipped` file with a
+    /// recorded VMAF (a post-encode `QualityTooLow`) back to `transcoding`,
+    /// **without** consulting the stored score. The encode and the VMAF are then
+    /// recomputed from scratch and re-gated against the current `MIN_VMAF`, so a
+    /// score that was a measurement artefact (e.g. the framesync misalignment bug)
+    /// is corrected and the file kept if it now clears the bar — genuine rejects
+    /// simply re-skip. Distinct from [`Self::requeue_quality_skips`], which trusts
+    /// the stored score and is for re-driving after *lowering* the threshold.
+    /// Returns the requeued ids; the transcode orchestrator's stale re-queue picks
+    /// them up on its own.
+    pub async fn recheck_quality_skips(&self) -> Result<Vec<MediaFileId>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+                UPDATE media_files
+                SET workflow_state = 'transcoding'
+                WHERE workflow_state = 'skipped'
+                  AND jsonb_exists(transcode_spec, 'vmaf')
+                RETURNING id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
+    }
+
     pub async fn fetch_expired_retention_files(
         &self,
         retention_days: i32,
@@ -1929,6 +1988,72 @@ mod tests {
         assert_eq!(file_state(&pool, f_done).await, "done");
 
         for id in [m_ok, m_low, m_no, m_done] {
+            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn recheck_quality_skips_requeues_all_scored_skips() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+
+        // A high stored score and a low one: both are quality skips, both must be
+        // requeued regardless of the score (the whole point is to re-measure).
+        let (m_hi, f_hi) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Skipped,
+            Some(serde_json::json!({ "crf": 24, "vmaf": 95.0 })),
+        )
+        .await;
+        let (m_lo, f_lo) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Skipped,
+            Some(serde_json::json!({ "crf": 24, "vmaf": 48.0 })),
+        )
+        .await;
+        // Skipped without a VMAF (e.g. insufficient size reduction) -> untouched.
+        let (m_no, f_no) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Skipped,
+            Some(serde_json::json!({ "crf": 24 })),
+        )
+        .await;
+        // Done with a VMAF -> not a skip, untouched.
+        let (m_done, f_done) = insert_movie_spec(
+            &pool,
+            WorkflowStateTag::Done,
+            Some(serde_json::json!({ "crf": 24, "vmaf": 99.0 })),
+        )
+        .await;
+
+        let ids = store.recheck_quality_skips().await.unwrap();
+
+        for f in [f_hi, f_lo] {
+            assert!(
+                ids.iter().any(|id| id.as_uuid() == f),
+                "every scored skip must be requeued"
+            );
+        }
+        for f in [f_no, f_done] {
+            assert!(
+                !ids.iter().any(|id| id.as_uuid() == f),
+                "unscored skip / done file must not be requeued"
+            );
+        }
+
+        assert_eq!(file_state(&pool, f_hi).await, "transcoding");
+        assert_eq!(file_state(&pool, f_lo).await, "transcoding");
+        assert_eq!(file_state(&pool, f_no).await, "skipped");
+        assert_eq!(file_state(&pool, f_done).await, "done");
+
+        for id in [m_hi, m_lo, m_no, m_done] {
             sqlx::query!("DELETE FROM movies WHERE id = $1", id)
                 .execute(&pool)
                 .await
