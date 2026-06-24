@@ -1,8 +1,11 @@
 use maud::{DOCTYPE, Markup, html};
 
 use crate::{
-    models::workflow::WorkflowStateTag,
-    store::{Backlog, CodecStateBreakdown, FailureBreakdownRow, FailureRecord, RetentionSummary},
+    models::{batch::BatchKey, workflow::WorkflowStateTag},
+    store::{
+        Backlog, BatchApprovalInfo, CodecStateBreakdown, FailureBreakdownRow, FailureRecord,
+        RetentionSummary,
+    },
 };
 
 const BYTES_PER_GB: f64 = 1_000_000_000.0;
@@ -22,6 +25,9 @@ pub struct DashboardData<'a> {
     pub min_vmaf: f64,
     pub vmaf: &'a [(i32, i64)],
     pub last_failure: Option<&'a FailureRecord>,
+    /// Batches in `pending_approval`, oldest first, with their request info.
+    /// Rendered with Approve/Reject forms when `control` is set.
+    pub pending: &'a [(BatchKey, BatchApprovalInfo)],
     /// `Some(token)` when write actions are enabled: the dashboard then renders
     /// action forms with this token embedded as a hidden field. `None` keeps the
     /// page strictly read-only.
@@ -30,6 +36,10 @@ pub struct DashboardData<'a> {
     pub flash_requeued: Option<i64>,
     /// Flash: `(count, gb_freed)` of originals deleted by the last action.
     pub flash_deleted: Option<(i64, f64)>,
+    /// Flash: title of the batch just approved (→ transcoding).
+    pub flash_approved: Option<&'a str>,
+    /// Flash: title of the batch just rejected (→ skipped).
+    pub flash_rejected: Option<&'a str>,
 }
 
 /// The dashboard page: per-state counts, total space saved, the outstanding
@@ -62,6 +72,12 @@ pub fn dashboard(d: DashboardData<'_>) -> Markup {
                     p.flash { "Deleted " (n) " original" @if n != 1 { "s" }
                         " (" (format!("{gb:.1}")) " GB freed)." }
                 }
+                @if let Some(title) = d.flash_approved {
+                    p.flash { "Approved “" (title) "” → transcoding." }
+                }
+                @if let Some(title) = d.flash_rejected {
+                    p.flash { "Rejected “" (title) "” → skipped." }
+                }
 
                 section.tiles {
                     @for state in ALL_STATES {
@@ -75,6 +91,8 @@ pub fn dashboard(d: DashboardData<'_>) -> Markup {
                 }
 
                 (backlog_panel(d.backlog))
+
+                (pending_panel(d.pending, d.control))
 
                 section {
                     h2 { "By codec & state" }
@@ -180,6 +198,65 @@ fn backlog_panel(b: &Backlog) -> Markup {
                     span.n { (format!("{:.1}", b.projected_saved_bytes as f64 / BYTES_PER_GB)) }
                     span.unit { "GB" }
                     span.label { "projected savings" }
+                }
+            }
+        }
+    }
+}
+
+/// Batches awaiting human approval — the gate that holds back the backlog. One
+/// row per batch (season/movie) with its title, file count, current size,
+/// projected savings and TMDB rating. When `control` is set, each row carries
+/// Approve/Reject forms (token + encoded batch id as hidden fields) that funnel
+/// into the same orchestrator the MQTT approval uses.
+fn pending_panel(pending: &[(BatchKey, BatchApprovalInfo)], control: Option<&str>) -> Markup {
+    html! {
+        section {
+            h2 { "Pending approval" }
+            @if pending.is_empty() {
+                p.empty { "Nothing awaiting approval." }
+            } @else {
+                table.breakdown {
+                    thead {
+                        tr {
+                            th { "batch" }
+                            th.num { "files" }
+                            th.num { "size (GB)" }
+                            th.num { "saves (GB)" }
+                            th.num { "rating" }
+                            @if control.is_some() { th { "action" } }
+                        }
+                    }
+                    tbody {
+                        @for (key, info) in pending {
+                            tr {
+                                td { (info.title) }
+                                td.num { (info.file_count) }
+                                td.num { (format!("{:.1}", info.total_size_gb)) }
+                                td.num { (format!("{:.1}", info.total_space_saved_gb)) }
+                                td.num {
+                                    @match info.tmdb_rating {
+                                        Some(r) => (format!("{r:.1}")),
+                                        None => "—",
+                                    }
+                                }
+                                @if let Some(token) = control {
+                                    td.actions {
+                                        form method="post" action="/actions/approve-batch" {
+                                            input type="hidden" name="token" value=(token);
+                                            input type="hidden" name="batch_id" value=(key.encode());
+                                            button type="submit" { "Approve" }
+                                        }
+                                        form method="post" action="/actions/reject-batch" {
+                                            input type="hidden" name="token" value=(token);
+                                            input type="hidden" name="batch_id" value=(key.encode());
+                                            button.reject type="submit" { "Reject" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

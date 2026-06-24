@@ -787,6 +787,58 @@ impl MediaStore {
             }
         }
     }
+
+    /// All batches currently in `pending_approval`, paired with their request
+    /// info (title, file count, sizes, rating) for the operator UI. Same shape as
+    /// [`Self::fetch_stale_pending_batches`] minus the staleness threshold —
+    /// oldest first — then resolves each key through
+    /// [`Self::fetch_batch_request_info`] so the UI shows exactly what the MQTT
+    /// request carries.
+    pub async fn fetch_pending_batches(
+        &self,
+    ) -> Result<Vec<(BatchKey, BatchApprovalInfo)>, StoreError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT 'season' AS kind, e.series_id, e.season_number AS season, NULL::uuid AS movie_id,
+                   MIN(mf.updated_at) AS oldest
+            FROM media_files mf JOIN episodes e ON mf.episode_id = e.id
+            WHERE mf.workflow_state = 'pending_approval'
+            GROUP BY e.series_id, e.season_number
+            UNION ALL
+            SELECT 'movie', NULL::uuid, NULL::smallint, mf.movie_id, mf.updated_at
+            FROM media_files mf
+            WHERE mf.movie_id IS NOT NULL
+              AND mf.workflow_state = 'pending_approval'
+            ORDER BY oldest ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let keys: Vec<BatchKey> = rows
+            .into_iter()
+            .map(|r| {
+                if r.kind.as_deref() == Some("season") {
+                    BatchKey::Season {
+                        series_id: SeriesId::from(r.series_id.unwrap()),
+                        season: r.season.unwrap(),
+                    }
+                } else {
+                    BatchKey::Movie {
+                        movie_id: MovieId::from(r.movie_id.unwrap()),
+                    }
+                }
+            })
+            .collect();
+
+        let mut batches = Vec::with_capacity(keys.len());
+        for key in keys {
+            let info = self.fetch_batch_request_info(&key).await?;
+            batches.push((key, info));
+        }
+        Ok(batches)
+    }
+
     /// Count of media files per workflow state, for the status snapshot. States
     /// with no files are simply absent from the result.
     pub async fn fetch_state_counts(&self) -> Result<Vec<(WorkflowStateTag, i64)>, StoreError> {
@@ -1468,6 +1520,69 @@ mod tests {
                 .unwrap();
         }
         sqlx::query!("DELETE FROM series WHERE id = $1", season)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn fetch_pending_batches_returns_only_pending_with_info() {
+        let Some(pool) = connect_db().await else {
+            eprintln!("DATABASE_URL not set, skipping");
+            return;
+        };
+        let store = MediaStore::new(pool.clone());
+
+        let (pending_movie, _) =
+            insert_movie_titled(&pool, "Pending Movie", WorkflowStateTag::PendingApproval).await;
+        let pending_season = insert_season_files(&pool, WorkflowStateTag::PendingApproval, 3).await;
+        // Must be excluded: not yet pending.
+        let (analyzed_movie, _) =
+            insert_movie_titled(&pool, "Analyzed Movie", WorkflowStateTag::Analyzed).await;
+
+        let batches = store.fetch_pending_batches().await.unwrap();
+
+        let movie = batches
+            .iter()
+            .find(|(k, _)| {
+                *k == BatchKey::Movie {
+                    movie_id: MovieId::from(pending_movie),
+                }
+            })
+            .expect("pending movie batch present");
+        assert_eq!(movie.1.title, "Pending Movie");
+        assert_eq!(movie.1.file_count, 1);
+
+        let season = batches
+            .iter()
+            .find(|(k, _)| {
+                *k == BatchKey::Season {
+                    series_id: SeriesId::from(pending_season),
+                    season: 1,
+                }
+            })
+            .expect("pending season batch present");
+        assert_eq!(
+            season.1.file_count, 3,
+            "all three episodes counted as one batch"
+        );
+
+        assert!(
+            !batches.iter().any(|(k, _)| *k
+                == BatchKey::Movie {
+                    movie_id: MovieId::from(analyzed_movie)
+                }),
+            "analyzed movie must not be pending"
+        );
+
+        for id in [pending_movie, analyzed_movie] {
+            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query!("DELETE FROM series WHERE id = $1", pending_season)
             .execute(&pool)
             .await
             .unwrap();

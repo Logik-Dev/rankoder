@@ -71,9 +71,10 @@ Configure the callers to `POST http://127.0.0.1:8765/sync` with header
 
 When the HTTP server is enabled (`http.enable`), `GET /` serves an operator
 dashboard: per-state file counts, total space saved, the outstanding **backlog**
-(files decided but not yet transcoded, with projected savings), a **codec ×
-state** breakdown, **failures grouped by cause**, the VMAF score distribution and
-the most recent failure. It is server-rendered (no JavaScript, no build step) and
+(files decided but not yet transcoded, with projected savings), the batches
+**pending approval**, a **codec × state** breakdown, **failures grouped by
+cause**, the VMAF score distribution and the most recent failure. It is
+server-rendered (no JavaScript, no build step) and
 reads straight through the app's database pool, so there is nothing extra to
 deploy — it ships inside the binary. The page refreshes itself every 60s.
 
@@ -86,6 +87,16 @@ for machine callers.
 
 The dashboard is read-only by default. Setting **`UI_CONTROL_TOKEN`** (in
 `environmentFile`) unlocks the mutating actions:
+
+- **Approve / reject a pending batch.** The *Pending approval* panel lists each
+  batch (season or movie) awaiting a decision — title, file count, current size,
+  projected savings, TMDB rating — with **Approve** (→ `transcoding`) and
+  **Reject** (→ `skipped`) buttons. This funnels into the *same* approval
+  chokepoint the MQTT round-trip uses, so it **coexists** with Home Assistant
+  rather than replacing it: either source can decide a batch, and a race or
+  double-submit is a safe no-op (the batch transition is an atomic
+  compare-and-swap). The per-batch in-flight cap (`approvalMaxPending`) still
+  applies — approving frees a slot and the feeder tops the queue back up.
 
 - **Requeue failed (per cause).** On the failures panel, a button per cause
   moves the failed files of a given class back to `discovered` so the pipeline
@@ -397,7 +408,7 @@ Add the flake as an input and import the module:
 | `syncInterval` | `3600` | Periodic library re-sync cadence in seconds (`SYNC_INTERVAL_SECS`). `0` = startup + webhook only |
 | `http.enable` | `false` | Run the HTTP server: operator [dashboard](#dashboard) (`GET /`) + sync webhook (`POST /sync`). The webhook needs `WEBHOOK_TOKEN` in `environmentFile`; without it the UI is still served |
 | `http.address` / `http.port` | `127.0.0.1` / `8765` | Bind address for the HTTP server (`HTTP_BIND`). Keep on loopback behind a reverse proxy |
-| `UI_CONTROL_TOKEN` | unset | **Secret** (set in `environmentFile`, not a module option): unlocks the dashboard's mutating [remediation actions](#remediation-actions) (failure requeue). Unset = strictly read-only UI |
+| `UI_CONTROL_TOKEN` | unset | **Secret** (set in `environmentFile`, not a module option): unlocks the dashboard's mutating [remediation actions](#remediation-actions) (approve/reject pending batches, failure requeue, delete confirmed originals). Unset = strictly read-only UI |
 | `minVmaf` | `0.0` | Post-encode VMAF quality gate (`MIN_VMAF`). `0` = observe only (measure + record, never reject); set > 0 (e.g. `92`) to reject encodes below it |
 | `backfillVmaf` | `false` | One-shot: score `done` files that predate the VMAF gate (`BACKFILL_VMAF`). Enable → deploy once → disable |
 | `requeueQualitySkips` | `false` | One-shot: re-encode `QualityTooLow` skips that now clear `MIN_VMAF` (`REQUEUE_QUALITY_SKIPS`). Enable → deploy once → disable |
@@ -469,10 +480,10 @@ ones open new fronts.
 3. **Maintenance UI (phase 2).** In progress — mutating [remediation
    actions](#remediation-actions) on the same dashboard (plain HTML forms, gated
    by `UI_CONTROL_TOKEN`), replacing the one-shot env flags and NixOS rebuilds.
-   Done: per-cause failure **requeue**, **delete quality-confirmed originals**
-   from retention. Next: approve/reject batches from the UI (the biggest lever —
-   unblocks the h264 backlog stuck behind MQTT approval), on-demand VMAF backfill
-   / requeue-quality-skips, re-analyse skips.
+   Done: **approve/reject pending batches** from the UI (coexists with MQTT —
+   unblocks the h264 backlog stuck behind the approval gate), per-cause failure
+   **requeue**, **delete quality-confirmed originals** from retention. Next:
+   on-demand VMAF backfill / requeue-quality-skips, re-analyse skips.
 
 ### Codec coverage
 

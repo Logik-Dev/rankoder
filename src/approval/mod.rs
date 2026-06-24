@@ -107,6 +107,15 @@ impl ApprovalOrchestrator {
         }
     }
 
+    /// Apply an approval decision from outside the MQTT loop (the operator UI).
+    /// Funnels into the same [`Self::handle_response`] chokepoint the MQTT
+    /// listener uses, so both sources share the one atomic batch transition: a
+    /// UI/MQTT race or a double-submit just re-runs the compare-and-swap and
+    /// returns no ids (a logged no-op), never a double-apply.
+    pub async fn apply_response(&self, response: ApprovalResponse) -> Result<()> {
+        self.handle_response(response).await
+    }
+
     #[instrument(skip(self), fields(batch_id = %response.batch_id, approved = response.approved), err)]
     async fn handle_response(&self, response: ApprovalResponse) -> Result<()> {
         let key = BatchKey::decode(&response.batch_id)

@@ -210,7 +210,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .clone()
             .run_approval_feeder(token.child_token(), cfg.approval_max_pending),
     );
-    join_set.spawn(approval_orchestrator.run_stale_checker(token.child_token(), 5));
+    join_set.spawn(
+        approval_orchestrator
+            .clone()
+            .run_stale_checker(token.child_token(), 5),
+    );
 
     let reaper = RetentionReaper::new(store.clone(), cfg.transcode_retention_days);
     join_set.spawn(reaper.run(token.child_token()));
@@ -238,6 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cfg.ui_control_token.clone(),
             cfg.min_vmaf,
             store.clone(),
+            Some(approval_orchestrator.clone()),
             sync_trigger.clone(),
             token.child_token(),
         ));

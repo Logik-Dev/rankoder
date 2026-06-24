@@ -126,6 +126,10 @@ table.breakdown button {
 
 table.breakdown button:hover { border-color: var(--accent); color: var(--accent); }
 
+/* Approve/Reject sit side by side in the pending-approval rows. */
+table.breakdown td.actions { display: flex; gap: 0.4rem; }
+table.breakdown button.reject:hover { border-color: var(--fail); color: var(--fail); }
+
 .flash {
   max-width: 960px;
   margin: 0 0 1rem;

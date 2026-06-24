@@ -1,0 +1,49 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT 'season' AS kind, e.series_id, e.season_number AS season, NULL::uuid AS movie_id,\n                   MIN(mf.updated_at) AS oldest\n            FROM media_files mf JOIN episodes e ON mf.episode_id = e.id\n            WHERE mf.workflow_state = 'pending_approval'\n            GROUP BY e.series_id, e.season_number\n            UNION ALL\n            SELECT 'movie', NULL::uuid, NULL::smallint, mf.movie_id, mf.updated_at\n            FROM media_files mf\n            WHERE mf.movie_id IS NOT NULL\n              AND mf.workflow_state = 'pending_approval'\n            ORDER BY oldest ASC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "series_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "season",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "movie_id",
+        "type_info": "Uuid",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "oldest",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "cc666099a5f8f30cab9f049541bc42bcc82598dc9cc34840fb90dfa5a09e55db"
+}

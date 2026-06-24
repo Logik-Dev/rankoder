@@ -10,7 +10,7 @@ use tokio::{net::TcpListener, sync::Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::{store::MediaStore, ui};
+use crate::{approval::ApprovalOrchestrator, store::MediaStore, ui};
 
 /// Header carrying the shared secret on webhook calls.
 const TOKEN_HEADER: &str = "x-rankoder-token";
@@ -31,18 +31,23 @@ struct WebhookState {
 ///
 /// Decoupling the webhook from the bind (it used to be mandatory) lets the UI be
 /// served without exposing a sync endpoint.
+// Thin wiring entry point: each argument is an independently-configured knob
+// (binds, two optional tokens, the quality bar, two shared handles, the cancel
+// token). Bundling them into a struct would only move the list, not shrink it.
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     bind: String,
     token: Option<String>,
     ui_control_token: Option<String>,
     min_vmaf: f64,
     store: Arc<MediaStore>,
+    approval: Option<Arc<ApprovalOrchestrator>>,
     trigger: Arc<Notify>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     let mut app = Router::new()
         .route("/healthz", get(healthz))
-        .merge(ui::router(store, ui_control_token, min_vmaf));
+        .merge(ui::router(store, ui_control_token, min_vmaf, approval));
 
     match token {
         Some(token) => {
