@@ -6,6 +6,16 @@ its *operational contract* (NixOS module options, environment variables, MQTT
 topics/payloads, DB migrations) rather than a Rust API.
 
 
+## [0.2.6] - 2026-06-24
+
+### Features
+
+- **ui:** Approve and reject pending batches from the dashboard
+
+### Bug Fixes
+
+- **devenv:** Start release commit with jj new so it can't clobber the feature message
+
 ## [0.2.5] - 2026-06-23
 
 ### Features
