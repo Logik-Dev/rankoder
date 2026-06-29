@@ -6,6 +6,12 @@ its *operational contract* (NixOS module options, environment variables, MQTT
 topics/payloads, DB migrations) rather than a Rust API.
 
 
+## [0.2.9] - 2026-06-29
+
+### Features
+
+- **mqtt:** Optional username/password auth for the broker
+
 ## [0.2.8] - 2026-06-29
 
 ### Bug Fixes
