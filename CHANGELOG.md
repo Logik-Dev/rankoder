@@ -6,6 +6,12 @@ its *operational contract* (NixOS module options, environment variables, MQTT
 topics/payloads, DB migrations) rather than a Rust API.
 
 
+## [0.2.8] - 2026-06-29
+
+### Bug Fixes
+
+- **sync:** Reconcile files dropped by the provider as missing
+
 ## [0.2.7] - 2026-06-24
 
 ### Features
