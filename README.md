@@ -354,10 +354,12 @@ Add the flake as an input and import the module:
             #   JELLYFIN_API_KEY=…
             #   RADARR_API_KEY=…      (optional)
             #   SONARR_API_KEY=…      (optional)
+            #   MQTT_PASSWORD=…       (optional, pairs with mqtt.username)
             environmentFile = config.sops.secrets.rankoder-env.path;
 
             jellyfinUrl = "https://jellyfin.example.com";
             mqtt.host   = "localhost";
+            # mqtt.username = "rankoder";   # optional, needs MQTT_PASSWORD
 
             radarrUrl = "https://radarr.example.com";   # optional
             sonarrUrl = "https://sonarr.example.com";   # optional
@@ -411,6 +413,7 @@ Add the flake as an input and import the module:
 | `tmpDir` / `retentionDir` | — (required) | Scratch / originals retention |
 | `mediaPaths` | `[]` | Library roots to grant **read-write** so the in-place swap can replace originals (e.g. `[ "/mnt/storage/medias" ]`). Required under `ProtectSystem=strict`, else the swap fails with EROFS. |
 | `mqtt.host` / `mqtt.port` | `localhost` / `1883` | Approval broker |
+| `mqtt.username` | `null` | MQTT auth username; pair with `MQTT_PASSWORD` in `environmentFile` |
 | `radarrUrl` / `sonarrUrl` | `null` | Enable per-manager refresh |
 | `database.url` | local socket | `DATABASE_URL` |
 | `database.provision` | `true` | Create DB + role on existing Postgres |

@@ -86,6 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &cfg.mqtt_host,
         cfg.mqtt_port,
         &cfg.mqtt_client_id,
+        cfg.mqtt_username
+            .as_deref()
+            .zip(cfg.mqtt_password.as_deref()),
     ));
     // The same MQTT notifier also drives operator-facing status/failure topics.
     let status_notifier: Arc<dyn StatusNotifier> = notifier.clone();

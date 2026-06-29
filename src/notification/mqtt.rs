@@ -26,9 +26,12 @@ pub struct MqttNotifier {
 }
 
 impl MqttNotifier {
-    pub fn new(host: &str, port: u16, client_id: &str) -> Self {
+    pub fn new(host: &str, port: u16, client_id: &str, credentials: Option<(&str, &str)>) -> Self {
         let mut options = MqttOptions::new(client_id, host, port);
         options.set_keep_alive(Duration::from_secs(30));
+        if let Some((username, password)) = credentials {
+            options.set_credentials(username, password);
+        }
         let (client, mut eventloop) = AsyncClient::new(options, 100);
 
         let (internal_tx, internal_rx) = mpsc::channel(100);

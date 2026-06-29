@@ -63,6 +63,14 @@ in
         default = 1883;
         description = "MQTT broker port.";
       };
+      username = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          MQTT username. When set (with `MQTT_PASSWORD` in the environment
+          file), the broker connection authenticates with these credentials.
+        '';
+      };
     };
 
     radarrUrl = lib.mkOption {
@@ -323,6 +331,7 @@ in
         SYNC_INTERVAL_SECS = toString cfg.syncInterval;
         RUST_LOG = cfg.logLevel;
       }
+      // lib.optionalAttrs (cfg.mqtt.username != null) { MQTT_USERNAME = cfg.mqtt.username; }
       // lib.optionalAttrs (cfg.radarrUrl != null) { RADARR_URL = cfg.radarrUrl; }
       // lib.optionalAttrs (cfg.sonarrUrl != null) { SONARR_URL = cfg.sonarrUrl; }
       // lib.optionalAttrs cfg.http.enable {

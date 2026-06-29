@@ -25,6 +25,8 @@ pub struct AppConfig {
     pub mqtt_host: String,
     pub mqtt_port: u16,
     pub mqtt_client_id: String,
+    pub mqtt_username: Option<String>,
+    pub mqtt_password: Option<String>,
     pub approval_max_pending: usize,
     pub transcode_tmp_dir: String,
     pub transcode_retention_dir: String,
@@ -84,6 +86,8 @@ impl AppConfig {
                 .map_err(|_| ConfigError::Missing("MQTT_HOST".into()))?,
             mqtt_port: parse_env("MQTT_PORT", 1883)?,
             mqtt_client_id: parse_env("MQTT_CLIENT_ID", "rankoder".to_string())?,
+            mqtt_username: non_empty(env::var("MQTT_USERNAME").ok()),
+            mqtt_password: non_empty(env::var("MQTT_PASSWORD").ok()),
             approval_max_pending: parse_env("APPROVAL_MAX_PENDING", 2)?,
             transcode_tmp_dir: env::var("TRANSCODE_TMP_DIR")
                 .map_err(|_| ConfigError::Missing("TRANSCODE_TMP_DIR".into()))?,
