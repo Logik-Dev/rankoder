@@ -915,13 +915,7 @@ mod tests {
     // tests are safe to run in parallel.
 
     use crate::store::MediaStore;
-    use serial_test::serial;
     use sqlx::PgPool;
-
-    async fn connect_db() -> Option<PgPool> {
-        let url = std::env::var("DATABASE_URL").ok()?;
-        PgPool::connect(&url).await.ok()
-    }
 
     async fn insert_movie(pool: &PgPool) -> Uuid {
         let id = Uuid::now_v7();
@@ -998,21 +992,8 @@ mod tests {
         .unwrap()
     }
 
-    async fn cleanup(pool: &PgPool, movie_id: Uuid) {
-        // Cascades to media_files -> events + retention_files.
-        sqlx::query!("DELETE FROM movies WHERE id = $1", movie_id)
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn process_file_completed_marks_done_with_retention() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn process_file_completed_marks_done_with_retention(pool: PgPool) {
         if !ffmpeg_available() {
             eprintln!("ffmpeg not available, skipping");
             return;
@@ -1047,17 +1028,10 @@ mod tests {
         assert!(file_path.ends_with(".mkv"), "file_path should point to mkv");
         assert_eq!(retention_count(&pool, id).await, 1);
         assert_eq!(event_count(&pool, id, "transcoded").await, 1);
-
-        cleanup(&pool, movie_id).await;
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn process_file_skipped_marks_skipped_without_retention() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn process_file_skipped_marks_skipped_without_retention(pool: PgPool) {
         if !ffmpeg_available() {
             eprintln!("ffmpeg not available, skipping");
             return;
@@ -1092,17 +1066,10 @@ mod tests {
         assert_eq!(file_path, src.to_str().unwrap(), "original path untouched");
         assert_eq!(retention_count(&pool, id).await, 0);
         assert_eq!(event_count(&pool, id, "skipped").await, 1);
-
-        cleanup(&pool, movie_id).await;
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn process_file_terminal_error_marks_failed() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn process_file_terminal_error_marks_failed(pool: PgPool) {
         if !ffmpeg_available() {
             eprintln!("ffmpeg not available, skipping");
             return;
@@ -1137,8 +1104,6 @@ mod tests {
         assert_eq!(state, WorkflowStateTag::Failed);
         assert_eq!(event_count(&pool, id, "transcode_failed").await, 1);
         assert_eq!(retention_count(&pool, id).await, 0);
-
-        cleanup(&pool, movie_id).await;
     }
 
     // ---- Media-manager notification ----------------------------------------
@@ -1211,14 +1176,6 @@ mod tests {
         id
     }
 
-    async fn cleanup_series(pool: &PgPool, series_id: Uuid) {
-        // Cascades to episodes -> media_files.
-        sqlx::query!("DELETE FROM series WHERE id = $1", series_id)
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
     async fn insert_movie_with_tmdb(pool: &PgPool, tmdb_id: i32) -> Uuid {
         let id = Uuid::now_v7();
         sqlx::query!(
@@ -1233,12 +1190,8 @@ mod tests {
         id
     }
 
-    #[tokio::test]
-    async fn notify_refreshes_movie_with_tmdb_id() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn notify_refreshes_movie_with_tmdb_id(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         let movie_id = insert_movie_with_tmdb(&pool, 603).await;
@@ -1252,16 +1205,10 @@ mod tests {
         TranscodeOrchestrator::notify_movie_manager(&store, Some(&notifier), &id).await;
 
         assert_eq!(notifier.calls.lock().unwrap().as_slice(), &[603]);
-
-        cleanup(&pool, movie_id).await;
     }
 
-    #[tokio::test]
-    async fn notify_skips_movie_without_tmdb_id() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn notify_skips_movie_without_tmdb_id(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         // insert_movie inserts without a tmdb_id.
@@ -1276,16 +1223,10 @@ mod tests {
         TranscodeOrchestrator::notify_movie_manager(&store, Some(&notifier), &id).await;
 
         assert!(notifier.calls.lock().unwrap().is_empty());
-
-        cleanup(&pool, movie_id).await;
     }
 
-    #[tokio::test]
-    async fn notify_refreshes_series_with_tvdb_id() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn notify_refreshes_series_with_tvdb_id(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         let series_id = insert_series_with_tvdb(&pool, 121361).await;
@@ -1295,16 +1236,10 @@ mod tests {
         TranscodeOrchestrator::notify_series_manager(&store, Some(&notifier), &id).await;
 
         assert_eq!(notifier.calls.lock().unwrap().as_slice(), &[121361]);
-
-        cleanup_series(&pool, series_id).await;
     }
 
-    #[tokio::test]
-    async fn notify_skips_series_without_tvdb_id() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn notify_skips_series_without_tvdb_id(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         // insert_series_with_tvdb is the only series helper that sets tvdb_id;
@@ -1324,7 +1259,5 @@ mod tests {
         TranscodeOrchestrator::notify_series_manager(&store, Some(&notifier), &id).await;
 
         assert!(notifier.calls.lock().unwrap().is_empty());
-
-        cleanup_series(&pool, series_id).await;
     }
 }

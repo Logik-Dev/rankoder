@@ -418,13 +418,41 @@ impl MediaStore {
     }
 
     pub async fn fetch_active_media_files(&self) -> Result<Vec<MediaFileId>, StoreError> {
+        // Only resume work for files still on disk. A 'missing' file (its
+        // provider item vanished, see reconcile_missing_files) would just fail
+        // to probe, so the catch-up skips it.
         let rows = sqlx::query!(
-            r#"SELECT id FROM media_files WHERE workflow_state NOT IN ('done', 'skipped', 'failed')"#
+            r#"SELECT id FROM media_files
+               WHERE workflow_state NOT IN ('done', 'skipped', 'failed')
+                 AND file_status = 'present'"#
         )
         .fetch_all(&self.pool)
         .await?;
 
         Ok(rows.into_iter().map(|r| MediaFileId::from(r.id)).collect())
+    }
+
+    /// Mark as `missing` every still-`present` file the provider stopped
+    /// listing. A sync only upserts the items it gets back (bumping
+    /// `last_seen_at`), so any `present` row untouched since `cutoff` (captured
+    /// just before the sync started) is an item that disappeared — typically a
+    /// file moved/renamed on disk, which the provider re-imports under a new id,
+    /// orphaning the old row. Reversible: if the item reappears, the upsert
+    /// flips it back to `present`. Returns the number of rows newly marked.
+    pub async fn reconcile_missing_files(
+        &self,
+        cutoff: time::OffsetDateTime,
+    ) -> Result<u64, StoreError> {
+        let result = sqlx::query!(
+            r#"UPDATE media_files
+               SET file_status = 'missing'
+               WHERE file_status = 'present' AND last_seen_at < $1"#,
+            cutoff,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 
     pub async fn transition(
@@ -1464,14 +1492,8 @@ fn round_1dp(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use sqlx::PgPool;
     use uuid::Uuid;
-
-    async fn connect_db() -> Option<PgPool> {
-        let url = std::env::var("DATABASE_URL").ok()?;
-        PgPool::connect(&url).await.ok()
-    }
 
     /// Inserts a movie + one media_file in the given state. Returns the movie id
     /// (deleting it cascades to the media_file).
@@ -1543,54 +1565,28 @@ mod tests {
         series_id
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn count_in_flight_includes_transcoding_and_pending_not_terminal() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn count_in_flight_includes_transcoding_and_pending_not_terminal(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
-        // Delta against a baseline so any pre-existing rows cancel out; #[serial]
-        // guarantees no concurrent churn of in-flight states during the test.
-        let baseline = store.count_in_flight_batches().await.unwrap();
-
-        let m_transcoding = insert_movie_file(&pool, WorkflowStateTag::Transcoding).await;
-        let m_pending = insert_movie_file(&pool, WorkflowStateTag::PendingApproval).await;
-        let season = insert_season_files(&pool, WorkflowStateTag::Transcoding, 2).await;
+        insert_movie_file(&pool, WorkflowStateTag::Transcoding).await;
+        insert_movie_file(&pool, WorkflowStateTag::PendingApproval).await;
+        insert_season_files(&pool, WorkflowStateTag::Transcoding, 2).await;
 
         // Non in-flight: must not be counted.
-        let m_analyzed = insert_movie_file(&pool, WorkflowStateTag::Analyzed).await;
-        let m_done = insert_movie_file(&pool, WorkflowStateTag::Done).await;
+        insert_movie_file(&pool, WorkflowStateTag::Analyzed).await;
+        insert_movie_file(&pool, WorkflowStateTag::Done).await;
 
-        let after = store.count_in_flight_batches().await.unwrap();
         assert_eq!(
-            after - baseline,
+            store.count_in_flight_batches().await.unwrap(),
             3,
             "2 in-flight movies + 1 in-flight season (multi-episode = one batch); \
              analyzed/done excluded"
         );
-
-        for id in [m_transcoding, m_pending, m_analyzed, m_done] {
-            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        sqlx::query!("DELETE FROM series WHERE id = $1", season)
-            .execute(&pool)
-            .await
-            .unwrap();
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn fetch_pending_batches_returns_only_pending_with_info() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn fetch_pending_batches_returns_only_pending_with_info(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         let (pending_movie, _) =
@@ -1634,17 +1630,6 @@ mod tests {
                 }),
             "analyzed movie must not be pending"
         );
-
-        for id in [pending_movie, analyzed_movie] {
-            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        sqlx::query!("DELETE FROM series WHERE id = $1", pending_season)
-            .execute(&pool)
-            .await
-            .unwrap();
     }
 
     fn failed_count(counts: &[(WorkflowStateTag, i64)]) -> i64 {
@@ -1686,21 +1671,14 @@ mod tests {
         (movie_id, file_id)
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn status_queries_surface_failures_and_savings() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn status_queries_surface_failures_and_savings(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         let max_before = store.fetch_max_event_id().await.unwrap();
-        let saved_before = store.fetch_total_space_saved_bytes().await.unwrap();
-        let failed_before = failed_count(&store.fetch_state_counts().await.unwrap());
 
         // A failed movie with a transcode_failed event.
-        let (fail_movie, fail_file) =
+        let (_, fail_file) =
             insert_movie_titled(&pool, "Inception fail", WorkflowStateTag::Failed).await;
         sqlx::query!(
             r#"INSERT INTO events (media_file_id, event) VALUES ($1, $2)"#,
@@ -1712,8 +1690,7 @@ mod tests {
         .unwrap();
 
         // A completed movie whose transcoded event records a 3 GB-ish saving.
-        let (done_movie, done_file) =
-            insert_movie_titled(&pool, "Saver", WorkflowStateTag::Done).await;
+        let (_, done_file) = insert_movie_titled(&pool, "Saver", WorkflowStateTag::Done).await;
         sqlx::query!(
             r#"INSERT INTO events (media_file_id, event) VALUES ($1, $2)"#,
             done_file,
@@ -1733,40 +1710,28 @@ mod tests {
         assert_eq!(ours.title.as_deref(), Some("Inception fail"));
         assert_eq!(ours.error, "ffmpeg boom");
 
-        // Most recent failure is the one we just inserted (#[serial]).
+        // Most recent failure is the one we just inserted (isolated DB).
         let last = store.fetch_last_failure().await.unwrap().unwrap();
         assert_eq!(last.media_file_id.as_uuid(), fail_file);
 
-        // Savings delta isolates our transcoded event.
-        let saved_after = store.fetch_total_space_saved_bytes().await.unwrap();
-        assert_eq!(saved_after - saved_before, 3_000_000);
+        // Only our transcoded event contributes on an isolated DB.
+        assert_eq!(
+            store.fetch_total_space_saved_bytes().await.unwrap(),
+            3_000_000
+        );
 
-        // The failed count grew by exactly one.
-        let failed_after = failed_count(&store.fetch_state_counts().await.unwrap());
-        assert_eq!(failed_after - failed_before, 1);
-
-        for id in [fail_movie, done_movie] {
-            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+        // Exactly one failed file.
+        assert_eq!(failed_count(&store.fetch_state_counts().await.unwrap()), 1);
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn requeue_failed_moves_only_matching_class() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn requeue_failed_moves_only_matching_class(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         // Two failed files with different failure causes.
-        let (perm_movie, perm_file) =
+        let (_, perm_file) =
             insert_movie_titled(&pool, "perm fail", WorkflowStateTag::Failed).await;
-        let (vp_movie, vp_file) =
-            insert_movie_titled(&pool, "vp fail", WorkflowStateTag::Failed).await;
+        let (_, vp_file) = insert_movie_titled(&pool, "vp fail", WorkflowStateTag::Failed).await;
         for (file, error) in [
             (perm_file, "swap failed: Permission denied (os error 13)"),
             (vp_file, "video properties missing for media file"),
@@ -1812,29 +1777,15 @@ mod tests {
             .await
             .unwrap();
         assert!(again.is_empty());
-
-        for id in [perm_movie, vp_movie] {
-            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn confirmed_originals_gated_on_min_vmaf() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn confirmed_originals_gated_on_min_vmaf(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
         let min_vmaf = 92.0;
 
-        let base = store.fetch_retention_summary(min_vmaf).await.unwrap();
-
         // done + VMAF above the bar -> confirmed (deletable).
-        let (good_movie, good_file) = insert_movie_spec(
+        let (_, good_file) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Done,
             Some(serde_json::json!({ "vmaf": 95.0 })),
@@ -1842,7 +1793,7 @@ mod tests {
         .await;
         insert_retention(&pool, good_file, "/tmp/orig_good.mkv").await;
         // done + VMAF below the bar -> held.
-        let (low_movie, low_file) = insert_movie_spec(
+        let (_, low_file) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Done,
             Some(serde_json::json!({ "vmaf": 80.0 })),
@@ -1850,7 +1801,7 @@ mod tests {
         .await;
         insert_retention(&pool, low_file, "/tmp/orig_low.mkv").await;
         // done but no VMAF recorded -> held (can't confirm).
-        let (novmaf_movie, novmaf_file) =
+        let (_, novmaf_file) =
             insert_movie_spec(&pool, WorkflowStateTag::Done, Some(serde_json::json!({}))).await;
         insert_retention(&pool, novmaf_file, "/tmp/orig_novmaf.mkv").await;
 
@@ -1861,17 +1812,10 @@ mod tests {
         assert!(!paths.contains(&"/tmp/orig_low.mkv"));
         assert!(!paths.contains(&"/tmp/orig_novmaf.mkv"));
 
-        // Summary: +1 confirmed, +2 held against the baseline (#[serial]).
-        let after = store.fetch_retention_summary(min_vmaf).await.unwrap();
-        assert_eq!(after.confirmed_count - base.confirmed_count, 1);
-        assert_eq!(after.held_count - base.held_count, 2);
-
-        for id in [good_movie, low_movie, novmaf_movie] {
-            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+        // Summary on an isolated DB: 1 confirmed, 2 held.
+        let summary = store.fetch_retention_summary(min_vmaf).await.unwrap();
+        assert_eq!(summary.confirmed_count, 1);
+        assert_eq!(summary.held_count, 2);
     }
 
     /// Inserts a movie + one media_file in `state` with the given
@@ -1931,38 +1875,33 @@ mod tests {
         .unwrap()
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn requeue_quality_skips_flips_only_eligible() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn requeue_quality_skips_flips_only_eligible(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         // Skipped with a recorded VMAF at/above the (lowered) threshold.
-        let (m_ok, f_ok) = insert_movie_spec(
+        let (_, f_ok) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Skipped,
             Some(serde_json::json!({ "crf": 24, "vmaf": 95.0 })),
         )
         .await;
         // Below the new threshold -> must stay skipped.
-        let (m_low, f_low) = insert_movie_spec(
+        let (_, f_low) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Skipped,
             Some(serde_json::json!({ "crf": 24, "vmaf": 80.0 })),
         )
         .await;
         // Skipped without a VMAF (e.g. insufficient size reduction) -> untouched.
-        let (m_no, f_no) = insert_movie_spec(
+        let (_, f_no) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Skipped,
             Some(serde_json::json!({ "crf": 24 })),
         )
         .await;
         // Already done with a high VMAF -> not a skip, untouched.
-        let (m_done, f_done) = insert_movie_spec(
+        let (_, f_done) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Done,
             Some(serde_json::json!({ "crf": 24, "vmaf": 99.0 })),
@@ -1986,47 +1925,35 @@ mod tests {
         assert_eq!(file_state(&pool, f_low).await, "skipped");
         assert_eq!(file_state(&pool, f_no).await, "skipped");
         assert_eq!(file_state(&pool, f_done).await, "done");
-
-        for id in [m_ok, m_low, m_no, m_done] {
-            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn recheck_quality_skips_requeues_all_scored_skips() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn recheck_quality_skips_requeues_all_scored_skips(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         // A high stored score and a low one: both are quality skips, both must be
         // requeued regardless of the score (the whole point is to re-measure).
-        let (m_hi, f_hi) = insert_movie_spec(
+        let (_, f_hi) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Skipped,
             Some(serde_json::json!({ "crf": 24, "vmaf": 95.0 })),
         )
         .await;
-        let (m_lo, f_lo) = insert_movie_spec(
+        let (_, f_lo) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Skipped,
             Some(serde_json::json!({ "crf": 24, "vmaf": 48.0 })),
         )
         .await;
         // Skipped without a VMAF (e.g. insufficient size reduction) -> untouched.
-        let (m_no, f_no) = insert_movie_spec(
+        let (_, f_no) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Skipped,
             Some(serde_json::json!({ "crf": 24 })),
         )
         .await;
         // Done with a VMAF -> not a skip, untouched.
-        let (m_done, f_done) = insert_movie_spec(
+        let (_, f_done) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Done,
             Some(serde_json::json!({ "crf": 24, "vmaf": 99.0 })),
@@ -2052,26 +1979,14 @@ mod tests {
         assert_eq!(file_state(&pool, f_lo).await, "transcoding");
         assert_eq!(file_state(&pool, f_no).await, "skipped");
         assert_eq!(file_state(&pool, f_done).await, "done");
-
-        for id in [m_hi, m_lo, m_no, m_done] {
-            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
     }
 
-    #[tokio::test]
-    #[serial]
-    async fn fetch_done_files_missing_vmaf_filters_correctly() {
-        let Some(pool) = connect_db().await else {
-            eprintln!("DATABASE_URL not set, skipping");
-            return;
-        };
+    #[sqlx::test]
+    async fn fetch_done_files_missing_vmaf_filters_correctly(pool: PgPool) {
         let store = MediaStore::new(pool.clone());
 
         // done + retention + no vmaf -> included.
-        let (m_inc, f_inc) = insert_movie_spec(
+        let (_, f_inc) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Done,
             Some(serde_json::json!({ "crf": 24 })),
@@ -2079,7 +1994,7 @@ mod tests {
         .await;
         insert_retention(&pool, f_inc, &format!("/tmp/orig_{f_inc}.mkv")).await;
         // done + retention + has vmaf -> excluded (already scored).
-        let (m_scored, f_scored) = insert_movie_spec(
+        let (_, f_scored) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Done,
             Some(serde_json::json!({ "crf": 24, "vmaf": 97.0 })),
@@ -2087,14 +2002,14 @@ mod tests {
         .await;
         insert_retention(&pool, f_scored, "/tmp/orig_scored.mkv").await;
         // done, no retention row -> excluded (original already reaped).
-        let (m_noret, f_noret) = insert_movie_spec(
+        let (_, f_noret) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Done,
             Some(serde_json::json!({ "crf": 24 })),
         )
         .await;
         // skipped + retention -> excluded (wrong state).
-        let (m_skip, f_skip) = insert_movie_spec(
+        let (_, f_skip) = insert_movie_spec(
             &pool,
             WorkflowStateTag::Skipped,
             Some(serde_json::json!({ "crf": 24 })),
@@ -2125,12 +2040,94 @@ mod tests {
                 "filtered file must be absent"
             );
         }
+    }
 
-        for id in [m_inc, m_scored, m_noret, m_skip] {
-            sqlx::query!("DELETE FROM movies WHERE id = $1", id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+    /// Inserts a movie + one media_file with an explicit `last_seen_at`,
+    /// returning the media_file id. file_status defaults to 'present'.
+    async fn insert_movie_file_seen_at(
+        pool: &PgPool,
+        state: WorkflowStateTag,
+        last_seen_at: time::OffsetDateTime,
+    ) -> Uuid {
+        let movie_id = Uuid::now_v7();
+        sqlx::query!(
+            "INSERT INTO movies (id, title) VALUES ($1, 'reconcile test')",
+            movie_id,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let file_id = Uuid::now_v7();
+        sqlx::query!(
+            r#"INSERT INTO media_files (id, movie_id, file_path, workflow_state, last_seen_at)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            file_id,
+            movie_id,
+            format!("/tmp/rec_{file_id}.mkv"),
+            state as WorkflowStateTag,
+            last_seen_at,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        file_id
+    }
+
+    async fn file_status_of(pool: &PgPool, file_id: Uuid) -> String {
+        sqlx::query_scalar!(
+            r#"SELECT file_status::text AS "s!" FROM media_files WHERE id = $1"#,
+            file_id,
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[sqlx::test]
+    async fn reconcile_flags_only_files_unseen_since_cutoff(pool: PgPool) {
+        let store = MediaStore::new(pool.clone());
+
+        // Fixed timestamps keep the assertion independent of wall-clock time.
+        let day1 = time::OffsetDateTime::from_unix_timestamp(1_577_836_800).unwrap(); // 2020-01-01
+        let day3 = time::OffsetDateTime::from_unix_timestamp(1_578_009_600).unwrap(); // 2020-01-03
+        let cutoff = time::OffsetDateTime::from_unix_timestamp(1_577_923_200).unwrap(); // 2020-01-02
+
+        let stale = insert_movie_file_seen_at(&pool, WorkflowStateTag::Skipped, day1).await;
+        let fresh = insert_movie_file_seen_at(&pool, WorkflowStateTag::Skipped, day3).await;
+
+        let marked = store.reconcile_missing_files(cutoff).await.unwrap();
+
+        assert_eq!(
+            marked, 1,
+            "only the file unseen since the cutoff is flagged"
+        );
+        assert_eq!(file_status_of(&pool, stale).await, "missing");
+        assert_eq!(file_status_of(&pool, fresh).await, "present");
+    }
+
+    #[sqlx::test]
+    async fn catch_up_skips_missing_files(pool: PgPool) {
+        let store = MediaStore::new(pool.clone());
+        let now = time::OffsetDateTime::now_utc();
+
+        let present = insert_movie_file_seen_at(&pool, WorkflowStateTag::Discovered, now).await;
+        let gone = insert_movie_file_seen_at(&pool, WorkflowStateTag::Discovered, now).await;
+        sqlx::query!(
+            "UPDATE media_files SET file_status = 'missing' WHERE id = $1",
+            gone,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let active = store.fetch_active_media_files().await.unwrap();
+
+        assert_eq!(
+            active,
+            vec![MediaFileId::from(present)],
+            "missing files are excluded from the catch-up resume set"
+        );
     }
 }

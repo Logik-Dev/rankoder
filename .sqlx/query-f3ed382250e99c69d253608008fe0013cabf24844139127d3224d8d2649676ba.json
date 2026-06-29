@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM movies WHERE id = $1",
+  "query": "UPDATE media_files SET file_status = 'missing' WHERE id = $1",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,5 +10,5 @@
     },
     "nullable": []
   },
-  "hash": "991a810756c93701196d30630302ac76fb8a5e0226c3850d5623e807517e5b0d"
+  "hash": "f3ed382250e99c69d253608008fe0013cabf24844139127d3224d8d2649676ba"
 }

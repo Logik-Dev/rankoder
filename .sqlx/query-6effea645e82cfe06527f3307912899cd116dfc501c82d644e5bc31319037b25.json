@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE media_files\n               SET file_status = 'missing'\n               WHERE file_status = 'present' AND last_seen_at < $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6effea645e82cfe06527f3307912899cd116dfc501c82d644e5bc31319037b25"
+}

@@ -35,6 +35,10 @@ where
     pub async fn sync(&self) -> Result<()> {
         info!("start syncing libraries");
 
+        // Captured before any upsert: the reconcile below treats every still
+        // 'present' row not touched since this instant as gone.
+        let started_at = time::OffsetDateTime::now_utc();
+
         let (series_raw, episodes_raw, movies_raw) = tokio::try_join!(
             self.series_provider.list_series(),
             self.series_provider.list_episodes(),
@@ -53,6 +57,19 @@ where
             movies = movie_count,
             "synced"
         );
+
+        // Flag files whose provider items vanished as 'missing'. Guarded on a
+        // non-empty result so a transient empty fetch can't mass-flag the whole
+        // library (and it self-heals on the next good sync anyway).
+        if episode_count + movie_count > 0 {
+            let marked = self.store.reconcile_missing_files(started_at).await?;
+            if marked > 0 {
+                info!(
+                    marked,
+                    "flagged files no longer listed by the provider as missing"
+                );
+            }
+        }
 
         Ok(())
     }

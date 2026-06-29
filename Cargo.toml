@@ -26,6 +26,3 @@ maud = "0.27"
 tokio-util = { version = "0.7.18", features = ["rt"] }
 rumqttc = "0.25"
 serde_with = "3.20"
-
-[dev-dependencies]
-serial_test = "3"

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id FROM media_files WHERE workflow_state NOT IN ('done', 'skipped', 'failed')",
+  "query": "SELECT id FROM media_files\n               WHERE workflow_state NOT IN ('done', 'skipped', 'failed')\n                 AND file_status = 'present'",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       false
     ]
   },
-  "hash": "7d2bc7df746bd6ba97b53768fa30fe638d5101b5f0ad11ce1ad575f81304a839"
+  "hash": "2af76af3b478d586c54524b12b8d6cebce4eda14f278e02641f9a6eadd6aa5e3"
 }

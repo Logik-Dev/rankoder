@@ -29,7 +29,10 @@ pub(crate) async fn upsert_movie_file(
            ON CONFLICT (jellyfin_id) WHERE jellyfin_id IS NOT NULL
            DO UPDATE SET
                last_seen_at = NOW(),
-               file_path = EXCLUDED.file_path
+               file_path = EXCLUDED.file_path,
+               -- a file the provider lists again is back: undo any prior
+               -- 'missing' marking from reconcile_missing_files.
+               file_status = 'present'
            RETURNING id AS "id: MediaFileId", (xmax = 0) AS "was_inserted!: bool""#,
         new_id as MediaFileId,
         movie_id as MovieId,
@@ -73,7 +76,10 @@ pub(crate) async fn upsert_episode_file(
            ON CONFLICT (jellyfin_id) WHERE jellyfin_id IS NOT NULL
            DO UPDATE SET
                last_seen_at = NOW(),
-               file_path = EXCLUDED.file_path
+               file_path = EXCLUDED.file_path,
+               -- a file the provider lists again is back: undo any prior
+               -- 'missing' marking from reconcile_missing_files.
+               file_status = 'present'
            RETURNING id AS "id: MediaFileId", (xmax = 0) AS "was_inserted!: bool""#,
         new_id as MediaFileId,
         episode_id as EpisodeId,
